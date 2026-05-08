@@ -1,0 +1,51 @@
+# Secrets — never commit. Loaded by wiki-audio at runtime via godotenv from
+# ~/.config/wiki-audio/.env on the wiki box; the copy in this directory is
+# only here for local planning convenience and must stay out of git.
+.env
+.env.*
+!.env.example
+
+# Example essays — reference inputs used to exercise the extractor during
+# planning. They live in the wiki repo, not here. Excluded so this repo
+# stays tool-only and the exact test sources aren't published.
+/examples/
+*.md.example
+
+# Build artifacts
+/dist/
+/build/
+*.exe
+*.test
+*.out
+wiki-audio
+!cmd/wiki-audio/
+
+# Local cache (the runtime cache lives at ~/.cache/wiki-audio/, but if a
+# dev ever points it at the repo root, don't ship the bytes)
+/.cache/
+*.mp3
+*.wav
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Go toolchain
+/vendor/
+*.test.coverage
+
+# Cloudflare Worker (worker/ subdir keeps wrangler artifacts out)
+worker/.wrangler/
+worker/node_modules/
+worker/dist/
+
+# Skill-loop orchestration files
+.skill-loop-progress.md
+.beads/snapshots/
+
+# bv (beads viewer) local config and caches
+.bv/
