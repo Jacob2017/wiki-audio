@@ -49,13 +49,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if flags.verbose && flags.quiet {
-				return fmt.Errorf("--verbose and --quiet are mutually exclusive")
-			}
 			if flags.envLocal {
-				if cmd.Flags().Changed("env") {
-					return fmt.Errorf("--env-local and --env are mutually exclusive")
-				}
 				flags.envPath = ".env"
 			}
 			slog.SetDefault(newLogger(cmd.ErrOrStderr(), flags))
@@ -77,6 +71,9 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVarP(&flags.quiet, "quiet", "q", false, "WARN slog level")
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "emit logs as JSON (slog.JSONHandler)")
 	root.Flags().BoolVar(&flags.version, "version", false, "print version and exit")
+
+	root.MarkFlagsMutuallyExclusive("verbose", "quiet")
+	root.MarkFlagsMutuallyExclusive("env", "env-local")
 
 	root.AddCommand(
 		newInitCmd(),
