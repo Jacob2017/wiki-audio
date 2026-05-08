@@ -37,6 +37,7 @@ const (
 
 type buildFlags struct {
 	dryRun          bool
+	extractOnly     bool
 	slug            string
 	forceRegression bool
 }
@@ -52,19 +53,27 @@ func newBuildCmd() *cobra.Command {
 			"summary plus a total credit/cost estimate. Use it as a cost preflight " +
 			"before bulk runs (§7 Phase G) and as a sanity check on the extractor.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !flags.dryRun {
+			switch {
+			case flags.extractOnly:
+				return runBuildExtractOnly(cmd, flags)
+			case flags.dryRun:
+				return runBuildDryRun(cmd, flags)
+			default:
 				return notImplemented("build")(cmd, args)
 			}
-			return runBuildDryRun(cmd, flags)
 		},
 	}
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false,
 		"extract + estimate cost only; no API calls, no file writes")
+	cmd.Flags().BoolVar(&flags.extractOnly, "extract-only", false,
+		"extract one essay (selected by --slug) and print the cleaned body to stdout; "+
+			"no chunking, no TTS, no file writes (§7 Phase D gate; wa-kyn.15)")
 	cmd.Flags().StringVar(&flags.slug, "slug", "",
 		"narrow to a single essay by slug (basename without .md, lowercased)")
 	cmd.Flags().BoolVar(&flags.forceRegression, "force-regression", false,
 		"downgrade extractor regression detection to a warning (regression check itself "+
 			"depends on r2 manifest fetch — currently a no-op pending wa-cfn.* / wa-76r.1)")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "extract-only")
 	return cmd
 }
 
