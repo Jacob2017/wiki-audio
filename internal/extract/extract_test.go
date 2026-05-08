@@ -199,3 +199,199 @@ func TestTitleCaseFromFilename(t *testing.T) {
 		}
 	}
 }
+
+// --- SplitNotes (§5.1 step 5, wa-kyn.5) ----------------------------------
+
+func TestSplitNotes_NoNotesSection(t *testing.T) {
+	const body = `# Title
+
+July 2023
+
+The essay body without any notes section.
+
+Just paragraphs of prose.
+`
+	prose, notes := SplitNotes(body)
+	if prose != body {
+		t.Errorf("prose should equal full body when no Notes marker present;\n got: %q\nwant: %q", prose, body)
+	}
+	if notes != "" {
+		t.Errorf("notes should be empty when no Notes marker present; got: %q", notes)
+	}
+}
+
+func TestSplitNotes_TypicalEssayWithH2Notes(t *testing.T) {
+	const body = `# Some Essay
+
+July 2023
+
+The body has multiple paragraphs.
+
+A second paragraph with [[1]] reference.
+
+## Notes
+
+[[1]] First footnote text.
+
+[[2]] Second footnote text.
+`
+	prose, notes := SplitNotes(body)
+	if !strings.Contains(prose, "July 2023") || !strings.Contains(prose, "second paragraph") {
+		t.Errorf("prose should contain body content; got: %q", prose)
+	}
+	if strings.Contains(prose, "## Notes") {
+		t.Errorf("prose should NOT contain the '## Notes' marker line; got: %q", prose)
+	}
+	if strings.Contains(prose, "First footnote") {
+		t.Errorf("prose should NOT contain footnote bodies; got: %q", prose)
+	}
+	if !strings.Contains(notes, "First footnote") || !strings.Contains(notes, "Second footnote") {
+		t.Errorf("notes should contain footnote bodies; got: %q", notes)
+	}
+	if strings.Contains(notes, "## Notes") {
+		t.Errorf("notes should NOT contain the marker line; got: %q", notes)
+	}
+}
+
+func TestSplitNotes_TypicalEssayWithBoldNotes(t *testing.T) {
+	const body = `# Some Essay
+
+Body paragraph one.
+
+Body paragraph two.
+
+**Notes**
+
+[[1]] note text.
+`
+	prose, notes := SplitNotes(body)
+	if !strings.Contains(prose, "Body paragraph one") {
+		t.Errorf("prose should contain body content; got: %q", prose)
+	}
+	if strings.Contains(prose, "**Notes**") {
+		t.Errorf("prose should NOT contain the '**Notes**' marker; got: %q", prose)
+	}
+	if !strings.Contains(notes, "[[1]] note text.") {
+		t.Errorf("notes should contain the note body; got: %q", notes)
+	}
+}
+
+func TestSplitNotes_MarkerAtVeryEndNoContent(t *testing.T) {
+	const body = `# Some Essay
+
+Body paragraph one.
+
+Body paragraph two.
+
+## Notes
+`
+	prose, notes := SplitNotes(body)
+	if !strings.Contains(prose, "Body paragraph one") || !strings.Contains(prose, "Body paragraph two") {
+		t.Errorf("prose should contain body content; got: %q", prose)
+	}
+	if strings.Contains(prose, "## Notes") {
+		t.Errorf("prose should NOT contain the marker line; got: %q", prose)
+	}
+	if strings.TrimSpace(notes) != "" {
+		t.Errorf("notes should be empty (or whitespace-only) when marker has no content after; got: %q", notes)
+	}
+}
+
+func TestSplitNotes_CaseInsensitive(t *testing.T) {
+	cases := []string{
+		"## NOTES",
+		"## notes",
+		"## NoTeS",
+		"**NOTES**",
+		"**notes**",
+		"**nOtEs**",
+	}
+	for _, marker := range cases {
+		body := "Prose here.\n\n" + marker + "\n\nNote body.\n"
+		prose, notes := SplitNotes(body)
+		if !strings.Contains(prose, "Prose here.") {
+			t.Errorf("marker %q: prose should contain 'Prose here.'; got: %q", marker, prose)
+		}
+		if !strings.Contains(notes, "Note body.") {
+			t.Errorf("marker %q: notes should contain 'Note body.'; got: %q", marker, notes)
+		}
+	}
+}
+
+func TestSplitNotes_TrailingWhitespace(t *testing.T) {
+	const body = "Prose.\n\n## Notes   \n\nNote body.\n"
+	prose, notes := SplitNotes(body)
+	if !strings.Contains(prose, "Prose.") {
+		t.Errorf("prose should contain 'Prose.'; got: %q", prose)
+	}
+	if !strings.Contains(notes, "Note body.") {
+		t.Errorf("notes should contain 'Note body.'; got: %q", notes)
+	}
+}
+
+func TestSplitNotes_VariantsDoNotMatch(t *testing.T) {
+	cases := []string{
+		"## Notes:",                 // colon variant
+		"## Notes section",          // extra word
+		"### Notes",                 // h3 not h2
+		"# Notes",                   // h1 not h2
+		"**Notes:**",                // colon inside bold
+		"** Notes **",               // spaces inside bold
+		"Notes",                     // bare text
+		"some inline ## Notes here", // not at start of line
+	}
+	for _, marker := range cases {
+		body := "Prose.\n\n" + marker + "\n\nMore text.\n"
+		prose, notes := SplitNotes(body)
+		if notes != "" {
+			t.Errorf("marker variant %q should NOT split (false positive); got notes=%q", marker, notes)
+		}
+		if prose != body {
+			t.Errorf("marker variant %q should leave prose intact", marker)
+		}
+	}
+}
+
+func TestSplitNotes_FirstMarkerWins(t *testing.T) {
+	const body = `Para one.
+
+**Notes**
+
+First match block.
+
+## Notes
+
+Second match (should never reach here as a split point).
+`
+	prose, notes := SplitNotes(body)
+	if !strings.Contains(prose, "Para one.") {
+		t.Errorf("prose should contain content before first marker")
+	}
+	if strings.Contains(prose, "First match block") {
+		t.Errorf("prose should not contain text after the first matching marker")
+	}
+	if !strings.Contains(notes, "First match block") {
+		t.Errorf("notes should contain text immediately after the first matching marker; got: %q", notes)
+	}
+	if !strings.Contains(notes, "## Notes") {
+		t.Errorf("a later '## Notes' literal should appear inside notes (not consumed as a second split); got: %q", notes)
+	}
+}
+
+func TestSplitNotes_EmptyInput(t *testing.T) {
+	prose, notes := SplitNotes("")
+	if prose != "" || notes != "" {
+		t.Errorf("empty rawBody → ('','') ; got prose=%q notes=%q", prose, notes)
+	}
+}
+
+func TestSplitNotes_MarkerAtVeryStart(t *testing.T) {
+	const body = "## Notes\n\nOnly note content.\n"
+	prose, notes := SplitNotes(body)
+	if prose != "" {
+		t.Errorf("when marker is the first line, prose must be empty; got: %q", prose)
+	}
+	if !strings.Contains(notes, "Only note content.") {
+		t.Errorf("notes should contain the body following the marker; got: %q", notes)
+	}
+}

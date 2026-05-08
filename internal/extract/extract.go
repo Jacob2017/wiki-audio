@@ -13,7 +13,8 @@ import (
 // Parsed is the output of §5.1 steps 1-4 (wa-kyn.4): a UTF-8 read of
 // the source file with the Readwise canonical "## Metadata" block and
 // "## Full Document" sentinel stripped. RawBody is the buffer ready
-// for step 5 (prose vs Notes split, wa-kyn.5).
+// for step 5 (prose vs Notes split — call SplitNotes on RawBody, see
+// wa-kyn.5).
 //
 // The "# Title" header line itself is NOT removed from RawBody — only
 // the metadata block and the Full Document sentinel are. Downstream
@@ -92,6 +93,38 @@ func stripReadwiseHeaders(content string) (string, error) {
 	out = append(out, lines[:metaIdx]...)
 	out = append(out, lines[fullDocIdx+1:]...)
 	return strings.Join(out, "\n"), nil
+}
+
+// SplitNotes scans rawBody line-by-line for the FIRST line that —
+// after strings.TrimSpace — equals (case-insensitively) either
+// "**Notes**" or "## Notes". These are the two Readwise canonical
+// Notes-section markers (§5.1 step 5, wa-kyn.5).
+//
+// Returns (prose, notes). prose is everything before the marker
+// line; notes is everything after it (may be empty if the marker is
+// the last non-blank line, i.e. the essay declares a Notes section
+// but has no footnotes in the export). If no marker appears at all,
+// prose == rawBody and notes is "".
+//
+// The marker line itself is dropped — it appears in neither output.
+//
+// Variants like "## Notes:" or "## Notes section" are intentionally
+// NOT matched. The two recognised forms are the only canonical ones
+// in the corpus; anything else is treated as prose to avoid false-
+// positive splits in essays whose body discusses notes-on-something.
+func SplitNotes(rawBody string) (prose, notes string) {
+	lines := strings.Split(rawBody, "\n")
+	for i, ln := range lines {
+		if isNotesMarker(ln) {
+			return strings.Join(lines[:i], "\n"), strings.Join(lines[i+1:], "\n")
+		}
+	}
+	return rawBody, ""
+}
+
+func isNotesMarker(line string) bool {
+	trim := strings.TrimSpace(line)
+	return strings.EqualFold(trim, "**Notes**") || strings.EqualFold(trim, "## Notes")
 }
 
 // titleCaseFromFilename derives a fallback title from a file basename
