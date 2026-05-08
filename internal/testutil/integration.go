@@ -24,6 +24,7 @@ package testutil
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -70,5 +71,16 @@ func RequireCredentials(t *testing.T, vars ...string) {
 	t.Helper()
 	if missing := missingCredentials(vars); len(missing) > 0 {
 		t.Skipf("integration test requires env: %s", strings.Join(missing, ", "))
+	}
+}
+
+// RequireBinary skips the calling test if a named external binary is not
+// resolvable on PATH. Use it for tests that shell out to ffmpeg, ffprobe,
+// or similar. Naming the missing binary in the skip message means a CI
+// runner that lacks ffmpeg gets "ffmpeg not on PATH", not silent green.
+func RequireBinary(t *testing.T, name string) {
+	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("test requires %q on PATH: %v", name, err)
 	}
 }

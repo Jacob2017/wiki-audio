@@ -93,3 +93,34 @@ func TestRequireCredentials_RunsWhenAllSet(t *testing.T) {
 		t.Errorf("RequireCredentials skipped despite both vars set")
 	}
 }
+
+// TestRequireBinary_SkipsWhenMissing — a binary that is guaranteed not to
+// exist must drive RequireBinary into a skip. The skip message must name
+// the missing binary so a CI failure is actionable.
+func TestRequireBinary_SkipsWhenMissing(t *testing.T) {
+	const phantom = "wiki-audio-test-binary-that-does-not-exist-xyz"
+
+	var ranAfterCall bool
+	t.Run("gated", func(t *testing.T) {
+		RequireBinary(t, phantom)
+		ranAfterCall = true
+	})
+
+	if ranAfterCall {
+		t.Errorf("code after RequireBinary executed despite phantom binary; should have skipped")
+	}
+}
+
+// TestRequireBinary_RunsWhenPresent — every Unix-like system has /bin/sh,
+// so we use "sh" as the always-present probe.
+func TestRequireBinary_RunsWhenPresent(t *testing.T) {
+	var ranAfterCall bool
+	t.Run("gated", func(t *testing.T) {
+		RequireBinary(t, "sh")
+		ranAfterCall = true
+	})
+
+	if !ranAfterCall {
+		t.Errorf("RequireBinary skipped despite \"sh\" being present on PATH")
+	}
+}
