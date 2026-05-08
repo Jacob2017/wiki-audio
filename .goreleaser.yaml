@@ -1,0 +1,80 @@
+# goreleaser config for wiki-audio. Cross-compiles a single static Go
+# binary for linux/amd64+arm64 and darwin/amd64+arm64; emits one .tar.gz
+# per target plus a sha256 checksums.txt.
+#
+# Why these four targets only — see wa-8gt.1.
+# Why tarball + sha256 — install.sh (wa-8gt.3) verifies SHA-256 before
+# moving the binary to PATH, which makes the curl|bash install line
+# not a supply-chain vulnerability.
+#
+# The Version variable lives in internal/cli (not main; pane-2's choice
+# in commit 0c1ab47 + version.go). Keep the -X path in sync if that
+# package or symbol moves.
+
+version: 2
+
+project_name: wiki-audio
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: wiki-audio
+    main: ./cmd/wiki-audio
+    binary: wiki-audio
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/Jacob2017/wiki-audio/internal/cli.Version={{.Version}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: wiki-audio
+    ids:
+      - wiki-audio
+    formats:
+      - tar.gz
+    name_template: 'wiki-audio_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    # Per wa-8gt.1 spec: "containing just the binary". install.sh
+    # (wa-8gt.3) extracts only the binary anyway. Goreleaser's default
+    # behavior also folds in LICENSE / README.md if present; that
+    # default is fine to keep — they're 3 KB of courtesy for anyone
+    # untarring by hand and the install.sh path ignores them.
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}'
+
+changelog:
+  # Build the GitHub Release body from git log between the previous tag
+  # and this one. Docs / CI / chore commits are filtered out — the
+  # release page is for end-users tracking shipped behavior.
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore:'
+      - '^test:'
+      - '^ci:'
+      - '^style:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+release:
+  github:
+    owner: Jacob2017
+    name: wiki-audio
+  draft: false
+  prerelease: auto
+  mode: replace
