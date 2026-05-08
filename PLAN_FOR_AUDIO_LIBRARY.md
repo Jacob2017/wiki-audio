@@ -31,13 +31,13 @@ The phone subscribes to the token-bearing feed URL in Pocket Casts. New episodes
                               ┌────────────────────────────────────┐
                               │  wiki box (any machine)            │
                               │  • single binary at /usr/local/bin │
-                              │  • config at ~/.config/wiki-audio/ │
+                              │  • config at ~/.wiki-audio/        │
                               │  • reads wiki content              │
                               │  • talks to ElevenLabs + R2        │
                               └────────────────────────────────────┘
 ```
 
-Wiki box only needs the installed binary, a config file at `~/.config/wiki-audio/config.toml`, and secrets in `~/.config/wiki-audio/.env`. Manifest state lives in R2 (`pg.manifest.json`), so the wiki box is fully stateless apart from config — re-installs and machine swaps don't lose track of what's been published.
+Wiki box only needs the installed binary, a config file at `~/.wiki-audio/config.toml`, and secrets in `~/.wiki-audio/.env`. Manifest state lives in R2 (`pg.manifest.json`), so the wiki box is fully stateless apart from config — re-installs and machine swaps don't lose track of what's been published.
 
 **Cost.** ~$99 one-shot on ElevenLabs Flash v2.5 (Pro tier, 1 month, then cancel). ~$0.01/month R2 storage thereafter. ~$0.50 per new PG-length essay added later.
 
@@ -111,7 +111,7 @@ type Manifest struct {
     LastPublishAt *time.Time                `json:"last_publish_at,omitempty"`
 }
 
-// Loaded from ~/.config/wiki-audio/config.toml.
+// Loaded from ~/.wiki-audio/config.toml.
 type Config struct {
     Wiki  WikiConfig  `toml:"wiki"`
     TTS   TTSConfig   `toml:"tts"`
@@ -151,7 +151,7 @@ type FeedConfig struct {
     Language      string `toml:"language"`     // default "en-us"
 }
 
-// Secrets loaded separately from ~/.config/wiki-audio/.env, never in TOML.
+// Secrets loaded separately from ~/.wiki-audio/.env, never in TOML.
 // Required env vars:
 //   ELEVENLABS_API_KEY
 //   R2_ACCESS_KEY_ID
@@ -167,7 +167,7 @@ type FeedConfig struct {
 
 ## 3. CLI / API surface
 
-Cobra-based subcommand structure. Single binary `wiki-audio`. Reads config from `~/.config/wiki-audio/config.toml` (override with `--config <path>`) and secrets from `~/.config/wiki-audio/.env` (override with `--env <path>`). All output to stdout/stderr; structured logging via `log/slog`.
+Cobra-based subcommand structure. Single binary `wiki-audio`. Reads config from `~/.wiki-audio/config.toml` (override with `--config <path>`) and secrets from `~/.wiki-audio/.env` (override with `--env <path>`, or `--env-local` to read `.env` from the current working directory — useful during development from inside the repo). All output to stdout/stderr; structured logging via `log/slog`.
 
 ### Install
 
@@ -179,7 +179,7 @@ fetching latest release: v0.3.1
 downloaded wiki-audio_0.3.1_linux_amd64.tar.gz (12 MB)
 verified sha256 ✓
 installed: /usr/local/bin/wiki-audio
-run: wiki-audio init  # to scaffold ~/.config/wiki-audio/
+run: wiki-audio init  # to scaffold ~/.wiki-audio/
 
 # Pin a version
 $ curl -fsSL https://raw.githubusercontent.com/Jacob2017/wiki-audio/main/install.sh | bash -s -- v0.3.0
@@ -200,8 +200,8 @@ Scaffolds the config directory on first install.
 
 ```bash
 $ wiki-audio init
-created ~/.config/wiki-audio/config.toml (with placeholders)
-created ~/.config/wiki-audio/.env       (chmod 600, empty)
+created ~/.wiki-audio/config.toml (with placeholders)
+created ~/.wiki-audio/.env       (chmod 600, empty)
 next: edit config.toml and populate .env, then run `wiki-audio doctor`
 ```
 
@@ -211,7 +211,7 @@ Verifies config + secrets + reachability of dependencies before any real work.
 
 ```bash
 $ wiki-audio doctor
-config.toml         ✓ /home/jacobuntu/.config/wiki-audio/config.toml
+config.toml         ✓ /home/jacobuntu/.wiki-audio/config.toml
 .env                ✓ all 4 required env vars present
 ffmpeg              ✓ ffmpeg version 6.1.1
 wiki source dir     ✓ 53 .md files at /home/jacobuntu/dev/wiki/Wiki/raw/processed/paul-graham
@@ -596,8 +596,8 @@ iTunes-namespaced RSS 2.0. Per `ManifestEntry`, emit:
 | R2 listing failure during diff | error from ListObjects | Abort publish; nothing uploaded; safe to retry. |
 | Stale R2 objects (essay deleted from raw/) | slug present on R2 but absent in manifest | `wiki-audio publish --prune` removes them. Default off — silent prune is dangerous. |
 | Network outage mid-bulk-run | repeated timeouts | Manifest is uploaded after each essay completion. Ctrl-C → re-run resumes from where it left off. |
-| API key in shell history | n/a | `~/.config/wiki-audio/.env` (chmod 600), loaded via `godotenv`. Never logged. Tool refuses to start if .env is world-readable. |
-| API key checked into git | pre-commit hook | `.env` lives outside any git repo by default (`~/.config/wiki-audio/.env`). The wiki-audio repo's `.gitignore` excludes `.env` defensively; `gitleaks` config in CI catches accidental commits. |
+| API key in shell history | n/a | `~/.wiki-audio/.env` (chmod 600), loaded via `godotenv`. Never logged. Tool refuses to start if .env is world-readable. |
+| API key checked into git | pre-commit hook | `.env` lives outside any git repo by default (`~/.wiki-audio/.env`). The wiki-audio repo's `.gitignore` excludes `.env` defensively; `gitleaks` config in CI catches accidental commits. |
 | Access token leak (e.g. screenshot of feed URL) | manual / suspicion | Rotate token: regen, `wrangler secret put ACCESS_TOKEN`, update local .env, run `wiki-audio publish --feed-only`, re-paste new feed URL into Pocket Casts. Old links 403 immediately. No object renames needed because token is in query string, not path. |
 | Cloudflare Worker outage | Worker error / 5xx from podcast app | R2 + Worker high availability is good but not 100%. Acceptable — podcast apps retry. No escalation path needed for v1. |
 | Bucket accidentally made public | manual review at Phase A gate | Phase A explicitly checks bare URL returns 403. Add yearly reminder via `/schedule` to re-verify. |
@@ -762,10 +762,10 @@ iTunes-namespaced RSS 2.0. Per `ManifestEntry`, emit:
 ### 9.1 Token policy
 
 - Generated once: 43 chars of `[A-Za-z0-9_-]`. Either via `wiki-audio init` (Go binary uses `crypto/rand` to produce 32 random bytes, base64-url-encoded), or out-of-band: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
-- Stored in Cloudflare Worker as a Secret (env var `ACCESS_TOKEN`), in `~/.config/wiki-audio/.env` as `WIKI_AUDIO_ACCESS_TOKEN`, and in 1Password.
+- Stored in Cloudflare Worker as a Secret (env var `ACCESS_TOKEN`), in `~/.wiki-audio/.env` as `WIKI_AUDIO_ACCESS_TOKEN`, and in 1Password.
 - Embedded into every URL in the feed at generation time (`internal/feed` reads the env var and appends `?t=<token>` to the feed self-link and every `<enclosure>` URL).
 - Compared in the Worker with a constant-time string compare to defeat timing oracles.
-- Rotation: regenerate, update Worker secret + `~/.config/wiki-audio/.env`, run `wiki-audio publish --feed-only`, re-paste the new feed URL into Pocket Casts. Old token immediately invalidated.
+- Rotation: regenerate, update Worker secret + `~/.wiki-audio/.env`, run `wiki-audio publish --feed-only`, re-paste the new feed URL into Pocket Casts. Old token immediately invalidated.
 
 ### 9.2 Worker (sketch)
 
@@ -838,5 +838,5 @@ export default {
 | Implementation language | **Go** — single static binary, cross-compile, zero runtime deps on target. Trade-off vs Python (richer libs, esp. `pysbd`) accepted; PG prose is uniform enough that paragraph-bounded chunking is sufficient. | §8.5, §8.6, all `internal/` packages |
 | Tool repo location | New private GitHub repo `Jacob2017/wiki-audio` — separate from the wiki repo. Worker code migrates from `tools/wiki-audio/worker/` into `wiki-audio/worker/`. Wiki repo retains nothing about the tool's source. | §1, §7 Phase B |
 | Distribution / install | `curl -fsSL https://raw.githubusercontent.com/Jacob2017/wiki-audio/main/install.sh \| bash` — auto-detects platform, downloads tarball from GitHub Releases (built by goreleaser on tag push), verifies sha256, drops binary at `/usr/local/bin/wiki-audio`. Pin version with `bash -s -- v0.3.0`. | §3, §7 Phase C |
-| Config location | `~/.config/wiki-audio/config.toml` (non-secret) and `~/.config/wiki-audio/.env` (secrets, chmod 600). Outside any git repo by default. | §2, §6 |
+| Config location | `~/.wiki-audio/config.toml` (non-secret) and `~/.wiki-audio/.env` (secrets, chmod 600). Outside any git repo by default. | §2, §6 |
 | State (manifest) location | R2 object `pg.manifest.json` — wiki box is stateless. Re-installs and machine swaps don't lose track of what's published. | §1, §6 |

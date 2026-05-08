@@ -5,7 +5,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config is the typed shape of ~/.config/wiki-audio/config.toml.
+// Config is the typed shape of ~/.wiki-audio/config.toml.
 // Fleshed out in Phase D — see wa-kyn.* beads.
 type Config struct{}
 

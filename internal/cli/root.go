@@ -13,6 +13,7 @@ import (
 type rootFlags struct {
 	configPath string
 	envPath    string
+	envLocal   bool
 	verbose    bool
 	quiet      bool
 	json       bool
@@ -24,7 +25,7 @@ func defaultConfigPath() string {
 	if err != nil {
 		return "config.toml"
 	}
-	return filepath.Join(home, ".config", "wiki-audio", "config.toml")
+	return filepath.Join(home, ".wiki-audio", "config.toml")
 }
 
 func defaultEnvPath() string {
@@ -32,7 +33,7 @@ func defaultEnvPath() string {
 	if err != nil {
 		return ".env"
 	}
-	return filepath.Join(home, ".config", "wiki-audio", ".env")
+	return filepath.Join(home, ".wiki-audio", ".env")
 }
 
 // NewRootCmd builds the wiki-audio Cobra command tree. All subcommands
@@ -51,6 +52,12 @@ func NewRootCmd() *cobra.Command {
 			if flags.verbose && flags.quiet {
 				return fmt.Errorf("--verbose and --quiet are mutually exclusive")
 			}
+			if flags.envLocal {
+				if cmd.Flags().Changed("env") {
+					return fmt.Errorf("--env-local and --env are mutually exclusive")
+				}
+				flags.envPath = ".env"
+			}
 			slog.SetDefault(newLogger(cmd.ErrOrStderr(), flags))
 			return nil
 		},
@@ -65,6 +72,7 @@ func NewRootCmd() *cobra.Command {
 
 	root.PersistentFlags().StringVar(&flags.configPath, "config", defaultConfigPath(), "path to config.toml")
 	root.PersistentFlags().StringVar(&flags.envPath, "env", defaultEnvPath(), "path to .env")
+	root.PersistentFlags().BoolVar(&flags.envLocal, "env-local", false, "load .env from current working directory (mutually exclusive with --env)")
 	root.PersistentFlags().BoolVarP(&flags.verbose, "verbose", "v", false, "DEBUG slog level")
 	root.PersistentFlags().BoolVarP(&flags.quiet, "quiet", "q", false, "WARN slog level")
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "emit logs as JSON (slog.JSONHandler)")
