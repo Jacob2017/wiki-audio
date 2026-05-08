@@ -64,9 +64,20 @@ resolve_version() {
         | head -n 1
 }
 
-# pick_install_dir — root → /usr/local/bin, else $HOME/.local/bin (created
-# with mkdir -p so a fresh user box doesn't fail on the first run).
+# pick_install_dir — install destination, in priority order:
+#   1. $INSTALL_DIR if set (e.g. set by `wiki-audio upgrade`, wa-8gt.5 —
+#      ensures the upgrade overwrites the SAME binary the user is currently
+#      running, regardless of whether they originally installed via sudo
+#      to /usr/local/bin or as a normal user to ~/.local/bin).
+#   2. /usr/local/bin if running as root.
+#   3. $HOME/.local/bin otherwise (created with mkdir -p so a fresh user
+#      box doesn't fail on the first run).
 pick_install_dir() {
+    if [ -n "${INSTALL_DIR:-}" ]; then
+        mkdir -p "$INSTALL_DIR" || err "could not create INSTALL_DIR=$INSTALL_DIR"
+        printf '%s' "$INSTALL_DIR"
+        return 0
+    fi
     if [ "$(id -u)" = "0" ]; then
         printf '%s' "/usr/local/bin"
         return 0
