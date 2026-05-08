@@ -107,8 +107,8 @@ func TestRoot_StdoutUnaffectedByLogLevel(t *testing.T) {
 		t.Fatalf("--version should succeed: %v", err)
 	}
 	got := strings.TrimSpace(stdout.String())
-	if got != Version {
-		t.Errorf("stdout should be exactly %q (got %q)", Version, got)
+	if got != VersionLine() {
+		t.Errorf("stdout should be the formatted VersionLine (got %q)", got)
 	}
 }
 

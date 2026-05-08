@@ -57,7 +57,7 @@ func NewRootCmd() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.version {
-				fmt.Fprintln(cmd.OutOrStdout(), Version)
+				fmt.Fprintln(cmd.OutOrStdout(), VersionLine())
 				return nil
 			}
 			return cmd.Help()

@@ -32,7 +32,14 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X github.com/Jacob2017/wiki-audio/internal/cli.Version={{.Version}}
+      # Inject Version + Commit + BuildTime into internal/cli per the
+      # wa-8gt.4 spec. `wiki-audio --version` formats these as:
+      #   wiki-audio v<Version> (commit <ShortCommit>, built <Date>)
+      # ShortCommit is goreleaser's 7-char SHA. Date is RFC3339 UTC.
+      - -s -w
+      - -X github.com/Jacob2017/wiki-audio/internal/cli.Version=v{{.Version}}
+      - -X github.com/Jacob2017/wiki-audio/internal/cli.Commit={{.ShortCommit}}
+      - -X github.com/Jacob2017/wiki-audio/internal/cli.BuildTime={{.Date}}
     mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
