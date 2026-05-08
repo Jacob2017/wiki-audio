@@ -1,0 +1,51 @@
+# Release workflow — fires on `v*` tag push and produces a GitHub Release
+# whose assets come from goreleaser's matrix build (linux/darwin × amd64/arm64
+# tarballs + checksums.txt). See wa-8gt.2 / wa-8gt.1.
+#
+# Why tag-push only: the human picks the version, the workflow mirrors it.
+# No release-please, no semantic-release, no auto-bumping. Simpler is better
+# for a single-author tool.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  # `contents: write` is the minimum needed for goreleaser to create the
+  # GitHub Release and upload the tarballs + checksums. Nothing else is
+  # written (no packages, no pages, no deployments).
+  contents: write
+
+jobs:
+  goreleaser:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — goreleaser needs tags + log for changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go (version pinned from go.mod)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: goreleaser release --clean
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # `latest` tracks goreleaser releases; pin a specific version here
+          # (e.g. v2.4.4) if a future release breaks the build and we need
+          # the workflow stable while we update .goreleaser.yaml.
+          version: '~> v2'
+          args: release --clean
+        env:
+          # GITHUB_TOKEN is auto-provisioned per-run by Actions; goreleaser
+          # uses it to create the Release and upload assets via the GitHub
+          # API. No PAT, no extra secret to rotate.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
