@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wiki-audio",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-01",
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "wiki-audio"
+    }
+  ]
+  // ACCESS_TOKEN is set via `wrangler secret put ACCESS_TOKEN` (NOT declared here).
+  // workers_dev is intentionally NOT set: the live deployment serves on
+  // wiki-audio.jabyrne.workers.dev under the account default. Per wa-3ia.1
+  // ("NO workers_dev: true flag (no public dev URL surface; only the configured
+  // route)") the long-term plan is to add a custom route and disable the
+  // workers.dev surface — deferred until that route exists, since flipping it
+  // off without a route would break the live deployment.
+}
