@@ -23,10 +23,26 @@ const (
 	DefaultCrossfadeSeconds = 0.05
 
 	// DefaultPerStepTimeout caps ONE ffmpeg pairwise invocation. Total
-	// runtime is bounded by ~PerStepTimeout × (N-1). 30s/step is generous
-	// — even a slow Pi-class host concatenates two ~3MB MP3s well inside
-	// 30s; if any step actually takes longer, ffmpeg is hung.
-	DefaultPerStepTimeout = 30 * time.Second
+	// runtime is bounded by ~PerStepTimeout × (N-1). The cap is per-step,
+	// not per-pipeline, because pairwise step duration grows linearly
+	// with N — step k processes the cumulative left-side from steps
+	// 1..k-1 plus one new chunk. Sizing rationale (wa-50g, surfaced by
+	// wa-4cw.8 spike on "How to Do Great Work", 18 chunks):
+	//
+	//	step  1: 5.8s     step  7: 18.8s    step 13: 32.9s
+	//	step  2: 7.9s     step  8: 21.3s    step 14: 36.1s
+	//	step  3: 10.4s    step  9: 23.5s    step 15: 37.4s
+	//	step  4: 12.6s    step 10: 26.2s    step 16: 40.2s
+	//	step  5: 14.3s    step 11: 29.0s    step 17: 41.2s (final, ~50MB left)
+	//	step  6: 16.7s    step 12: 31.5s
+	//
+	// 5 minutes is ~6× headroom over the worst observed case (41.2s) on
+	// a 50 MB cumulative left-side at 87× realtime ffmpeg. A hypothetical
+	// 100-chunk essay (~280 MB final) projects to ~240s for the last
+	// step — still inside 5m. The original 30 s default (sized for the
+	// FIRST pairwise step where both inputs are ~3 MB) killed the spike
+	// at step 13. Don't tighten without re-measuring on a 50+ chunk run.
+	DefaultPerStepTimeout = 5 * time.Minute
 )
 
 // Options tweaks Concat behavior. Zero-valued fields are replaced with the
