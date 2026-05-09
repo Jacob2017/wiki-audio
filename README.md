@@ -122,3 +122,4 @@ detailed source. Read `AGENTS.md` for contributor conventions.
 - Cache implementation: `internal/cache/cache.go` (canonical paths)
 - Manifest schema + version guard: `internal/manifest/`, wa-76r.1
 - Atomic write helpers: `internal/atomic/`, wa-76r.2
+- Yearly bucket-privacy audit (recurring): `scripts/audit-bucket-privacy.sh`, wa-3ia.4 (procedure + scheduling hints in `worker/README.md`)

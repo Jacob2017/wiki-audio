@@ -130,3 +130,50 @@ These are EXPLICIT acceptances. Anyone proposing an upgrade must first show why 
 ## Yearly bucket-privacy verification
 
 Schedule reminder: bead **wa-3ia.4**. Once a year, walk the R2 dashboard to confirm public access is OFF, the public dev URL is OFF, and the custom-domains tab is empty (or only the Worker route). Cloudflare's dashboard UX has historically made it easy to flip dev URLs on by accident — the yearly check catches dashboard drift even when no one touched the bucket deliberately.
+
+### Procedure
+
+The four curl-based checks are scripted at [`scripts/audit-bucket-privacy.sh`](../scripts/audit-bucket-privacy.sh); the dashboard check is browser-only and must be done by hand the same day.
+
+```
+$ scripts/audit-bucket-privacy.sh
+```
+
+The script:
+
+1. Sources `WIKI_AUDIO_ACCESS_TOKEN` from `~/.wiki-audio/.env` if not already exported.
+2. Probes `BASE_URL/<key>` four times — bare-no-token (expect 403), wrong-token (403), right-token+missing-key (404), right-token+real-key (200/206).
+3. Appends a timestamped record per check to `~/.cache/wiki-audio/audit-YYYY-MM-DD.txt`.
+4. Exits non-zero if any check returns the wrong status.
+
+Then in a browser, open the Cloudflare dashboard → R2 → bucket `wiki-audio` and confirm:
+
+- Public access — OFF
+- Custom domains tab — empty (or only the intended Worker route)
+- Public Development URL — OFF (the toggle is per-bucket and Cloudflare's default UI changes periodically, so re-check even if nothing was touched)
+
+Paste the screenshot or text dump beside the audit log file so the year's evidence is in one place.
+
+### Scheduling
+
+Pick whichever fits your workflow:
+
+- **Cron** — `0 9 9 5 * /path/to/wiki-audio/scripts/audit-bucket-privacy.sh` (annually on May 9).
+- **systemd timer** — same shape, with `OnCalendar=*-05-09 09:00:00`.
+- **`/schedule`** slash command — yearly recurrence pointing at the script.
+- **Plain calendar reminder** — the lowest-effort option; the script is just shell so an operator can paste the command into a terminal once a year.
+
+The bead stays open in perpetuity; "done" applies per yearly run, not to the bead itself.
+
+### Pre-Phase-G note
+
+Before Phase G has uploaded any audio to R2, the right-token+real-key check will report 404 instead of 200/206. That is the documented benign state, not a regression — the script reports it as a failure (1 of 4), and the operator confirms the bucket is empty before treating it as one. Once Phase G publishes content, the script passes 4-of-4.
+
+### Fail paths
+
+The bead enumerates the recovery steps for each check; the short version:
+
+- bare or wrong-token returning anything other than 403 → token gate broken; `wrangler rollback`.
+- right-token+missing-key returning 403 → token short-circuit somewhere; `wrangler rollback`. The 403/403/404 ordering IS the regression signal.
+- right-token+real-key returning anything other than 200/206/404 → R2 binding wrong or key deleted; check the R2 console.
+- dashboard drift on any of the three toggles → treat as a security incident; rotate the token (wa-76r.4) before flipping the toggle back, since the URL was crawlable while the dashboard was wrong.
