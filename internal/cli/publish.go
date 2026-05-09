@@ -41,13 +41,15 @@ const (
 var errPublishNoToken = errors.New(
 	"publish: WIKI_AUDIO_ACCESS_TOKEN is empty (run wiki-audio doctor)")
 
-// publishFlags carries the user-facing flags. Phase F splits
-// --feed-only (wa-i1l.8) and --dry-run (wa-i1l.9) into their own
-// beads; this file wires the flag plumbing now and dispatches when
-// those beads are claimed by routing through the same Run() body.
+// publishFlags carries the user-facing flags. --feed-only (wa-i1l.8)
+// and --dry-run (wa-i1l.9) are mutually exclusive modes; --prune
+// (wa-i1l.10) is an additive flag that only makes sense alongside
+// the default mode (the only one that computes Plan.Stale and
+// performs writes).
 type publishFlags struct {
 	feedOnly bool
 	dryRun   bool
+	prune    bool
 }
 
 func newPublishCmd() *cobra.Command {
@@ -67,11 +69,16 @@ func newPublishCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&flags.feedOnly, "feed-only", false,
 		"regenerate and upload pg.xml only; skip MP3 diff + upload "+
-			"(used after token rotation; full impl is wa-i1l.8)")
+			"(used after token rotation)")
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false,
-		"compute and print the diff, do NOT upload anything "+
-			"(full impl is wa-i1l.9)")
+		"compute and print the diff, do NOT upload anything")
+	cmd.Flags().BoolVar(&flags.prune, "prune", false,
+		"delete R2 objects under pg/ that no manifest entry claims "+
+			"(off by default — stale objects are usually old episodes "+
+			"that were renamed or unindexed; opt in explicitly)")
 	cmd.MarkFlagsMutuallyExclusive("feed-only", "dry-run")
+	cmd.MarkFlagsMutuallyExclusive("feed-only", "prune")
+	cmd.MarkFlagsMutuallyExclusive("dry-run", "prune")
 	return cmd
 }
 
@@ -177,7 +184,7 @@ func runPublish(cmd *cobra.Command, flags *publishFlags) error {
 		return fmt.Errorf("publish: r2.New: %w", err)
 	}
 
-	return runPublishCore(ctx, cmd.OutOrStdout(), store, cfg, token, mode, time.Now)
+	return runPublishCore(ctx, cmd.OutOrStdout(), store, cfg, token, mode, flags.prune, time.Now)
 }
 
 // runPublishCore is the orchestrator's pure logic, factored out so
@@ -207,6 +214,7 @@ func runPublishCore(
 	cfg *model.Config,
 	token string,
 	mode publishMode,
+	prune bool,
 	nowFn func() time.Time,
 ) error {
 	logger := slog.With("phase", "publish", "bucket", cfg.R2.Bucket, "mode", mode.String())
@@ -271,10 +279,61 @@ func runPublishCore(
 		return fmt.Errorf("publish: build feed URL: %w", err)
 	}
 	fmt.Fprintf(out, "feed live at %s\n", feedURL)
+
+	// wa-i1l.10: --prune deletes R2 objects under pg/ that no
+	// manifest entry claims. Off by default. Runs LAST so a delete
+	// failure doesn't strand the feed pointing at a manifest that
+	// references a still-present-but-pruned key. Order:
+	//   uploads → manifest → feed → prune
+	// If prune fails partway, the run reports the error but the
+	// feed + manifest are already consistent; next publish re-
+	// computes Stale and prunes whatever didn't get cleaned up.
+	if prune && len(plan.Stale) > 0 {
+		if err := pruneStaleObjects(ctx, store, plan.Stale, cfg.R2.Bucket, logger, out); err != nil {
+			return err
+		}
+	} else if prune {
+		fmt.Fprintln(out, "prune: nothing to delete (0 stale objects on r2)")
+	}
+
 	logger.Info("publish complete",
 		"uploaded", len(uploads),
 		"unchanged", len(plan.Unchanged),
-		"stale_on_r2", len(plan.Stale))
+		"stale_on_r2", len(plan.Stale),
+		"pruned", prune && len(plan.Stale) > 0)
+	return nil
+}
+
+// pruneStaleObjects deletes the keys reported in Plan.Stale. Stops
+// at the first delete failure so a buggy classification or
+// transient R2 issue doesn't cascade through the whole stale list.
+// The caller has already printed the per-key delete lines; an
+// error mid-loop leaves the surviving stale keys in place for the
+// next publish run.
+func pruneStaleObjects(
+	ctx context.Context,
+	store r2.Storage,
+	stale []r2.ObjectInfo,
+	bucket string,
+	logger *slog.Logger,
+	out io.Writer,
+) error {
+	fmt.Fprintf(out, "prune: deleting %d stale R2 object(s):\n", len(stale))
+	for _, obj := range stale {
+		if err := store.DeleteObject(ctx, obj.Key); err != nil {
+			// errors.Is(err, r2.ErrNoSuchKey) on prune is benign
+			// (raced with another deleter), but the runtime cost
+			// of a few extra lines is small enough that we report
+			// it consistently — operator can suppress at log level
+			// if it gets noisy.
+			logger.Error("prune: delete failed",
+				"key", obj.Key, "err", err.Error())
+			return fmt.Errorf("publish: prune %s: %w", obj.Key, err)
+		}
+		fmt.Fprintf(out, "  pruned r2://%s/%s\n", bucket, obj.Key)
+	}
+	fmt.Fprintf(out, "pruned %d stale R2 object(s)\n", len(stale))
+	logger.Info("prune complete", "deleted", len(stale))
 	return nil
 }
 

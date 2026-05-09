@@ -119,7 +119,7 @@ func TestPublish_EmptyBucketUploadsAll(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime())
+	err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime())
 	if err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestPublish_ExistingEtagMatchSkipsUpload(t *testing.T) {
 	// missing source file would surface as a read error.
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestPublish_ChangedEtagUploadsOverwrite(t *testing.T) {
 	f.addCacheMP3(t, "alpha", cacheBody)
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -271,7 +271,7 @@ func TestPublish_UploadOrderMP3sThenManifestThenFeed(t *testing.T) {
 	f.addCacheMP3(t, "alpha", []byte("alpha-body"))
 	f.addCacheMP3(t, "beta", []byte("beta-body"))
 
-	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -329,7 +329,7 @@ func TestPublish_PartialFailureLeavesOldFeedAndManifest(t *testing.T) {
 
 	failing := &failAfterN{Storage: f.fake, allowedPuts: 1, prefix: "pg/"}
 
-	err := runPublishCore(context.Background(), io.Discard, failing, f.cfg, f.tokens, modeDefault, frozenTime())
+	err := runPublishCore(context.Background(), io.Discard, failing, f.cfg, f.tokens, modeDefault, false, frozenTime())
 	if err == nil {
 		t.Fatal("expected error from partial-failure")
 	}
@@ -450,7 +450,7 @@ func TestPublish_DiffCountLogged(t *testing.T) {
 	f.addCacheMP3(t, "newone", []byte("n-body"))
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -480,7 +480,7 @@ func TestPublish_FeedOnlySkipsMP3Uploads(t *testing.T) {
 	// an MP3, the missing source file would surface as an error.
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeFeedOnly, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeFeedOnly, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore feed-only: %v", err)
 	}
 
@@ -520,7 +520,7 @@ func TestPublish_FeedOnlyUploadsPgxmlAndSkipsManifest(t *testing.T) {
 	}
 	f.putManifestOnFake(t, mft)
 
-	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeFeedOnly, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeFeedOnly, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore feed-only: %v", err)
 	}
 
@@ -568,7 +568,7 @@ func TestPublish_DryRunZeroWrites(t *testing.T) {
 	// pre-populate's PUT doesn't mask a misbehaving dry-run.
 	preOps := len(f.fake.Operations())
 
-	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDryRun, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDryRun, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore dry-run: %v", err)
 	}
 
@@ -598,7 +598,7 @@ func TestPublish_DryRunPrintsDiffAndWouldUploadLines(t *testing.T) {
 	f.addCacheMP3(t, "alpha", bytes.Repeat([]byte("X"), 4096))
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDryRun, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDryRun, false, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore dry-run: %v", err)
 	}
 
@@ -626,6 +626,127 @@ func TestPublish_DryRunPrintsDiffAndWouldUploadLines(t *testing.T) {
 	}
 	if !strings.Contains(got, "beta.mp3 (size unknown)") {
 		t.Errorf("expected beta to show size-unknown; got:\n%s", got)
+	}
+}
+
+// --- --prune (wa-i1l.10) ---
+
+// prune_disabled_by_default: 3 stale objects on R2 → zero
+// DeleteObject calls when --prune is NOT set. The default
+// behavior leaves stale objects untouched; the operator must opt
+// in explicitly.
+func TestPublish_PruneDisabledByDefault(t *testing.T) {
+	f := setupPublishFixture(t)
+	// 3 stale objects under pg/ that no manifest entry claims.
+	for _, key := range []string{"pg/old-essay-1.mp3", "pg/old-essay-2.mp3", "pg/old-essay-3.mp3"} {
+		if _, err := f.fake.PutObject(context.Background(),
+			key, bytes.NewReader([]byte("stale")), 5, "audio/mpeg"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{},
+	}
+	f.putManifestOnFake(t, mft)
+
+	preOps := len(f.fake.Operations())
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore: %v", err)
+	}
+	for _, op := range f.fake.Operations()[preOps:] {
+		if op.Name == "DeleteObject" {
+			t.Errorf("default mode performed DeleteObject(%s); want zero (--prune off)", op.Key)
+		}
+	}
+	// And the stale objects survive on R2.
+	for _, key := range []string{"pg/old-essay-1.mp3", "pg/old-essay-2.mp3", "pg/old-essay-3.mp3"} {
+		if _, err := f.fake.HeadObject(context.Background(), key); err != nil {
+			t.Errorf("stale %s should survive when --prune is off; got %v", key, err)
+		}
+	}
+}
+
+// prune_deletes_stale: --prune + 3 stale → 3 DeleteObject calls,
+// stale list printed, summary line printed.
+func TestPublish_PruneDeletesStale(t *testing.T) {
+	f := setupPublishFixture(t)
+	staleKeys := []string{"pg/old-essay-1.mp3", "pg/old-essay-2.mp3", "pg/old-essay-3.mp3"}
+	for _, key := range staleKeys {
+		if _, err := f.fake.PutObject(context.Background(),
+			key, bytes.NewReader([]byte("stale")), 5, "audio/mpeg"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{},
+	}
+	f.putManifestOnFake(t, mft)
+
+	var out bytes.Buffer
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, true, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore --prune: %v", err)
+	}
+
+	deletes := 0
+	for _, op := range f.fake.Operations() {
+		if op.Name == "DeleteObject" {
+			deletes++
+		}
+	}
+	if deletes != len(staleKeys) {
+		t.Errorf("DeleteObject calls = %d, want %d", deletes, len(staleKeys))
+	}
+
+	// Each stale key was actually removed.
+	for _, key := range staleKeys {
+		if _, err := f.fake.HeadObject(context.Background(), key); !errors.Is(err, r2.ErrNoSuchKey) {
+			t.Errorf("stale %s should be gone after --prune; HEAD err = %v", key, err)
+		}
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "prune: deleting 3 stale R2 object(s):") {
+		t.Errorf("missing prune banner; got:\n%s", got)
+	}
+	if !strings.Contains(got, "pruned 3 stale R2 object(s)") {
+		t.Errorf("missing prune summary; got:\n%s", got)
+	}
+	for _, key := range staleKeys {
+		if !strings.Contains(got, "pruned r2://wiki-audio/"+key) {
+			t.Errorf("missing per-key prune line for %s; got:\n%s", key, got)
+		}
+	}
+}
+
+// prune_no_op_on_clean: --prune + zero stale → no DeleteObject
+// calls + a clean status line. Surfacing "nothing to delete" is
+// useful so operators know the flag was honored even when there
+// was nothing to do.
+func TestPublish_PruneNoOpOnClean(t *testing.T) {
+	f := setupPublishFixture(t)
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", Title: "Alpha"},
+		},
+	}
+	f.putManifestOnFake(t, mft)
+	f.addCacheMP3(t, "alpha", []byte("alpha-body"))
+
+	var out bytes.Buffer
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, true, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore --prune (clean): %v", err)
+	}
+
+	for _, op := range f.fake.Operations() {
+		if op.Name == "DeleteObject" {
+			t.Errorf("clean prune should perform 0 DeleteObject; got delete on %s", op.Key)
+		}
+	}
+	if !strings.Contains(out.String(), "prune: nothing to delete (0 stale objects on r2)") {
+		t.Errorf("missing clean-prune status line; got:\n%s", out.String())
 	}
 }
 
