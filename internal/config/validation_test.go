@@ -60,15 +60,15 @@ func captureSlog(t *testing.T, level slog.Level) *bytes.Buffer {
 func TestLoadConfigHTTPBaseURLAcceptedAsShipped(t *testing.T) {
 	src := t.TempDir()
 	body := strings.Replace(validTOML(src),
-		"https://wiki-audio.jabyrne.workers.dev",
-		"http://wiki-audio.jabyrne.workers.dev", 1)
+		"https://wiki-audio.example.workers.dev",
+		"http://wiki-audio.example.workers.dev", 1)
 	path := writeTOML(t, body)
 
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("http BaseURL was rejected (current behavior is to accept): %v", err)
 	}
-	if cfg.Feed.BaseURL != "http://wiki-audio.jabyrne.workers.dev" {
+	if cfg.Feed.BaseURL != "http://wiki-audio.example.workers.dev" {
 		t.Errorf("BaseURL not preserved: %q", cfg.Feed.BaseURL)
 	}
 }

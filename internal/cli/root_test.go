@@ -115,12 +115,12 @@ func TestRoot_StdoutUnaffectedByLogLevel(t *testing.T) {
 func TestRedactURL_StripsAccessToken(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{
-			in:   "https://wiki-audio.jabyrne.workers.dev/pg/x.mp3?t=abc123",
-			want: "https://wiki-audio.jabyrne.workers.dev/pg/x.mp3?t=%3Credacted%3E",
+			in:   "https://wiki-audio.example.workers.dev/pg/x.mp3?t=abc123",
+			want: "https://wiki-audio.example.workers.dev/pg/x.mp3?t=%3Credacted%3E",
 		},
 		{
-			in:   "https://wiki-audio.jabyrne.workers.dev/pg/x.mp3",
-			want: "https://wiki-audio.jabyrne.workers.dev/pg/x.mp3",
+			in:   "https://wiki-audio.example.workers.dev/pg/x.mp3",
+			want: "https://wiki-audio.example.workers.dev/pg/x.mp3",
 		},
 		{
 			in:   "https://example.com/?token=secret&debug=1",
@@ -144,7 +144,7 @@ func TestRedactURL_StripsAccessToken(t *testing.T) {
 
 func TestRedactURL_NoSecretInRedactedOutput(t *testing.T) {
 	const token = "supersecret43charsbase64urlnoPaddingxxxxxxx"
-	in := "https://wiki-audio.jabyrne.workers.dev/pg/x.mp3?t=" + token
+	in := "https://wiki-audio.example.workers.dev/pg/x.mp3?t=" + token
 	out := RedactURL(in)
 	if strings.Contains(out, token) {
 		t.Errorf("redacted output still contains token: %q", out)

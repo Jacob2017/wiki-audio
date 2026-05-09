@@ -120,7 +120,7 @@ type R2Config struct {
 }
 
 // FeedConfig drives RSS generation. BaseURL is the public Worker URL
-// (e.g. https://wiki-audio.jabyrne.workers.dev) — episode enclosure
+// (e.g. https://wiki-audio.example.workers.dev) — episode enclosure
 // URLs are built as BaseURL/<R2Key>?t=<token>.
 type FeedConfig struct {
 	Title         string `toml:"title"                     json:"title"`

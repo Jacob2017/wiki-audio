@@ -145,7 +145,7 @@ type FeedConfig struct {
     Description   string `toml:"description"`
     Author        string `toml:"author"`
     OwnerEmail    string `toml:"owner_email"`
-    BaseURL       string `toml:"base_url"`     // e.g. https://wiki-audio.jabyrne.workers.dev
+    BaseURL       string `toml:"base_url"`     // e.g. https://wiki-audio.example.workers.dev
     FeedPath      string `toml:"feed_path"`    // default "pg.xml"
     CoverImageURL string `toml:"cover_image_url,omitempty"`
     Language      string `toml:"language"`     // default "en-us"
@@ -217,7 +217,7 @@ ffmpeg              ✓ ffmpeg version 6.1.1
 wiki source dir     ✓ 53 .md files at /home/jacobuntu/dev/wiki/Wiki/raw/processed/paul-graham
 ElevenLabs API      ✓ authenticated, voice "Christopher" reachable, 487,222 credits remaining on plan
 R2 bucket           ✓ wiki-audio (private, 0 objects)
-worker access       ✓ https://wiki-audio.jabyrne.workers.dev returns 403 without token, 404 with token
+worker access       ✓ https://wiki-audio.example.workers.dev returns 403 without token, 404 with token
 all checks passed.
 ```
 
@@ -261,7 +261,7 @@ uploading how-to-do-great-work.mp3 (62.4 MB) → r2://wiki-audio/pg/how-to-do-gr
 uploading beating-the-averages.mp3 (9.1 MB) → r2://wiki-audio/pg/beating-the-averages.mp3 ✓
 …
 regenerating pg.xml (53 items) → r2://wiki-audio/pg.xml ✓
-feed live at https://wiki-audio.jabyrne.workers.dev/pg.xml?t=<token>
+feed live at https://wiki-audio.example.workers.dev/pg.xml?t=<token>
 
 # regen feed only (e.g. after editing feed.toml metadata)
 $ wiki-audio publish --feed-only
@@ -282,7 +282,7 @@ dropped:      4 code blocks (Lisp), 0 footnotes
 chunks:       3 × ~2,700 chars
 last build:   2026-05-08T14:21:03Z
 last publish: 2026-05-08T14:24:11Z
-r2 url:       https://wiki-audio.jabyrne.workers.dev/pg/beating-the-averages.mp3?t=<token>
+r2 url:       https://wiki-audio.example.workers.dev/pg/beating-the-averages.mp3?t=<token>
 duration:     12m04s
 ```
 
@@ -562,7 +562,7 @@ iTunes-namespaced RSS 2.0. Per `ManifestEntry`, emit:
 ```xml
 <item>
   <title>How to Do Great Work</title>
-  <enclosure url="https://wiki-audio.jabyrne.workers.dev/pg/how-to-do-great-work.mp3?t=<token>"
+  <enclosure url="https://wiki-audio.example.workers.dev/pg/how-to-do-great-work.mp3?t=<token>"
              length="65437184" type="audio/mpeg" />
   <guid isPermaLink="false">pg-how-to-do-great-work</guid>
   <pubDate>Thu, 08 May 2026 14:21:03 GMT</pubDate>
@@ -614,7 +614,7 @@ iTunes-namespaced RSS 2.0. Per `ManifestEntry`, emit:
 **Phase A — already done (Worker + R2 infra).**
 - ✅ R2 bucket `wiki-audio` created (no public access, no dev URL).
 - ✅ Access token generated, stored as Worker secret `ACCESS_TOKEN` and (locally) `WIKI_AUDIO_ACCESS_TOKEN`.
-- ✅ Cloudflare Worker deployed at `https://wiki-audio.jabyrne.workers.dev`; constant-time token gate verified (bare URL → 403, wrong token → 403, correct token + missing key → 404).
+- ✅ Cloudflare Worker deployed at `https://wiki-audio.example.workers.dev`; constant-time token gate verified (bare URL → 403, wrong token → 403, correct token + missing key → 404).
 
 > The Worker code currently lives at `tools/wiki-audio/worker/`. **Migration step:** when the new repo is created (Phase B), move `tools/wiki-audio/worker/` into the new repo and delete the directory from the wiki repo.
 

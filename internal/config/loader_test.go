@@ -46,7 +46,7 @@ title = "PG"
 description = "Paul Graham essays"
 author = "Paul Graham"
 owner_email = "me@example.com"
-base_url = "https://wiki-audio.jabyrne.workers.dev"
+base_url = "https://wiki-audio.example.workers.dev"
 `, sourceDir)
 }
 
@@ -274,7 +274,7 @@ func TestLoadConfigBaseURLValidation(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			body := strings.Replace(validTOML(src),
-				`base_url = "https://wiki-audio.jabyrne.workers.dev"`,
+				`base_url = "https://wiki-audio.example.workers.dev"`,
 				fmt.Sprintf(`base_url = %q`, c.baseURL), 1)
 			path := writeTOML(t, body)
 			_, err := LoadConfig(path)

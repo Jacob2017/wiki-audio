@@ -26,7 +26,7 @@ const (
 	envToken      = "WIKI_AUDIO_ACCESS_TOKEN"
 	envFixtureKey = "WIKI_AUDIO_FIXTURE_KEY"
 
-	defaultWorkerURL  = "https://wiki-audio.jabyrne.workers.dev"
+	defaultWorkerURL  = "https://wiki-audio.example.workers.dev"
 	defaultFixtureKey = "pg/how-to-do-great-work.mp3"
 
 	// per-request budget; the Worker is on a global edge and should respond
