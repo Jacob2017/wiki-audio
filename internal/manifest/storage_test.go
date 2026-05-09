@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -77,12 +78,22 @@ func TestLoad_CorruptPrimaryFallsBackToBak(t *testing.T) {
 	putBlob(t, store, PrimaryKey, []byte(`{"version": 1, "entries":`), "application/json") // truncated
 	putBlob(t, store, BackupKey, mustEncode(t, want), "application/json")
 
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(old)
+
 	got, err := Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Load with corrupt primary should fall back to .bak; got err: %v", err)
 	}
 	if got.Entries["backup-essay"].Title != "Recovered" {
 		t.Errorf(".bak fallback returned wrong content: %+v", got.Entries)
+	}
+	for _, want := range []string{"level=WARN", PrimaryKey, BackupKey} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("fallback warning missing %q in logs:\n%s", want, logs.String())
+		}
 	}
 }
 
@@ -96,7 +107,10 @@ func TestLoad_BothCorruptAborts(t *testing.T) {
 		t.Fatal("expected error when both primary and backup are corrupt")
 	}
 	for _, want := range []string{
-		PrimaryKey, BackupKey, "manual inspection required",
+		"both " + PrimaryKey + " and " + BackupKey + " are corrupt",
+		"refusing to overwrite",
+		"mc cat r2/wiki-audio/" + PrimaryKey,
+		"mc cat r2/wiki-audio/" + BackupKey,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should name %q; got %q", want, err.Error())
@@ -114,6 +128,24 @@ func TestLoad_CorruptPrimary_MissingBak_Aborts(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "manual inspection required") {
 		t.Errorf("error should suggest manual inspection; got %q", err.Error())
+	}
+}
+
+func TestLoad_MainValidBakCorrupt_ReturnsPrimary(t *testing.T) {
+	store := r2.NewFake()
+	primary := &model.Manifest{
+		Version: KnownManifestVersion,
+		Entries: map[string]model.ManifestEntry{"x": {Slug: "x", Title: "Primary Wins"}},
+	}
+	putBlob(t, store, PrimaryKey, mustEncode(t, primary), "application/json")
+	putBlob(t, store, BackupKey, []byte(`{"broken":`), "application/json")
+
+	got, err := Load(context.Background(), store)
+	if err != nil {
+		t.Fatalf("Load should ignore corrupt backup when primary is valid: %v", err)
+	}
+	if got.Entries["x"].Title != "Primary Wins" {
+		t.Fatalf("loaded wrong manifest: %+v", got.Entries)
 	}
 }
 
@@ -211,6 +243,116 @@ func TestSave_FutureVersionRefused(t *testing.T) {
 	}
 }
 
+func TestSave_OverwritesOldBak(t *testing.T) {
+	store := r2.NewFake()
+	putBlob(t, store, BackupKey, []byte(`{"stale":true}`), contentType)
+
+	prior := &model.Manifest{
+		Version: KnownManifestVersion,
+		Entries: map[string]model.ManifestEntry{"a": {Slug: "a", Title: "Prior"}},
+	}
+	priorBytes := mustEncode(t, prior)
+	putBlob(t, store, PrimaryKey, priorBytes, contentType)
+
+	next := &model.Manifest{
+		Version: KnownManifestVersion,
+		Entries: map[string]model.ManifestEntry{"a": {Slug: "a", Title: "Next"}},
+	}
+	if err := Save(context.Background(), store, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	rc, err := store.GetObject(context.Background(), BackupKey)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("read backup body: %v", err)
+	}
+	if !bytes.Equal(got, priorBytes) {
+		t.Fatalf("backup should be overwritten with prior primary bytes\n got: %s\nwant: %s", got, priorBytes)
+	}
+}
+
+func TestSave_OlderVersionBumpsToCurrent(t *testing.T) {
+	if KnownManifestVersion == 0 {
+		t.Skip("no older version exists")
+	}
+
+	store := r2.NewFake()
+	m := &model.Manifest{
+		Version: KnownManifestVersion - 1,
+		Entries: map[string]model.ManifestEntry{"a": {Slug: "a", Title: "Older"}},
+	}
+	if err := Save(context.Background(), store, m); err != nil {
+		t.Fatalf("Save older version: %v", err)
+	}
+
+	got, err := Load(context.Background(), store)
+	if err != nil {
+		t.Fatalf("Load after save: %v", err)
+	}
+	if got.Version != KnownManifestVersion {
+		t.Fatalf("Version after save/load = %d; want %d", got.Version, KnownManifestVersion)
+	}
+}
+
+func TestSave_WritesAtomicPerObject(t *testing.T) {
+	base := r2.NewFake()
+	prior := &model.Manifest{
+		Version: KnownManifestVersion,
+		Entries: map[string]model.ManifestEntry{"a": {Slug: "a", Title: "Prior"}},
+	}
+	priorBytes := mustEncode(t, prior)
+	putBlob(t, base, PrimaryKey, priorBytes, contentType)
+
+	next := &model.Manifest{
+		Version: KnownManifestVersion,
+		Entries: map[string]model.ManifestEntry{"a": {Slug: "a", Title: "Next"}},
+	}
+	wantNextBytes := mustEncode(t, next)
+
+	var midRead []byte
+	var midReadErr error
+	store := &observingStorage{
+		base: base,
+		onPrimaryPut: func() {
+			rc, err := base.GetObject(context.Background(), PrimaryKey)
+			if err != nil {
+				midReadErr = err
+				return
+			}
+			defer rc.Close()
+			midRead, midReadErr = io.ReadAll(rc)
+		},
+	}
+
+	if err := Save(context.Background(), store, next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if midReadErr != nil {
+		t.Fatalf("mid-save read: %v", midReadErr)
+	}
+	if !bytes.Equal(midRead, priorBytes) {
+		t.Fatalf("mid-save reader should see intact prior bytes, not a partial write\n got: %s\nwant: %s", midRead, priorBytes)
+	}
+
+	rc, err := base.GetObject(context.Background(), PrimaryKey)
+	if err != nil {
+		t.Fatalf("read final primary: %v", err)
+	}
+	defer rc.Close()
+	finalBytes, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read final primary body: %v", err)
+	}
+	if !bytes.Equal(finalBytes, wantNextBytes) {
+		t.Fatalf("final primary bytes mismatch\n got: %s\nwant: %s", finalBytes, wantNextBytes)
+	}
+}
+
 // TestSave_RotateThenWriteOrdering pins the wa-i1l.2 step ordering:
 // a Save with prior content → .bak is written BEFORE the new primary
 // is uploaded, so a hypothetical step-4 failure would leave the .bak
@@ -279,8 +421,8 @@ func TestLoad_PrimaryAndBackupBothPresent_PrefersPrimary(t *testing.T) {
 func TestLoad_FutureVersionDecodes(t *testing.T) {
 	store := r2.NewFake()
 	body, _ := json.Marshal(map[string]any{
-		"version": KnownManifestVersion + 100,
-		"entries": map[string]any{},
+		"version":                               KnownManifestVersion + 100,
+		"entries":                               map[string]any{},
 		"new_field_only_known_to_future_binary": true,
 	})
 	putBlob(t, store, PrimaryKey, body, "application/json")
@@ -292,4 +434,56 @@ func TestLoad_FutureVersionDecodes(t *testing.T) {
 	if got.Version != KnownManifestVersion+100 {
 		t.Errorf("future-version Version = %d; want %d", got.Version, KnownManifestVersion+100)
 	}
+}
+
+func TestEncode_RoundTripPreservesUnknownRootFields(t *testing.T) {
+	m, err := Decode(strings.NewReader(`{
+  "version": 1,
+  "entries": {},
+  "future_root_field": {"nested": true}
+}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := Encode(m, &buf); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &raw); err != nil {
+		t.Fatalf("unmarshal round-trip: %v", err)
+	}
+	if _, ok := raw["future_root_field"]; !ok {
+		t.Fatalf("future_root_field dropped during round-trip: %s", buf.Bytes())
+	}
+}
+
+type observingStorage struct {
+	base         *r2.Fake
+	onPrimaryPut func()
+}
+
+func (s *observingStorage) PutObject(ctx context.Context, key string, r io.Reader, size int64, contentType string) (string, error) {
+	if key == PrimaryKey && s.onPrimaryPut != nil {
+		s.onPrimaryPut()
+	}
+	return s.base.PutObject(ctx, key, r, size, contentType)
+}
+
+func (s *observingStorage) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.base.GetObject(ctx, key)
+}
+
+func (s *observingStorage) HeadObject(ctx context.Context, key string) (r2.ObjectInfo, error) {
+	return s.base.HeadObject(ctx, key)
+}
+
+func (s *observingStorage) DeleteObject(ctx context.Context, key string) error {
+	return s.base.DeleteObject(ctx, key)
+}
+
+func (s *observingStorage) ListObjects(ctx context.Context, prefix string) ([]r2.ObjectInfo, error) {
+	return s.base.ListObjects(ctx, prefix)
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/Jacob2017/wiki-audio/internal/model"
 	"github.com/Jacob2017/wiki-audio/internal/r2"
@@ -34,8 +35,8 @@ const (
 //   - Primary missing                → empty Manifest{Version: KnownManifestVersion, Entries: {}}
 //   - Primary present + decodes OK   → parsed Manifest
 //   - Primary present + decode fails → fall back to BackupKey
-//                                       → backup decodes OK   → return backup
-//                                       → backup missing/bad  → abort with manual-inspection error
+//     → backup decodes OK   → return backup
+//     → backup missing/bad  → abort with manual-inspection error
 //
 // Reading is forgiving (json.Unmarshal ignores unknown fields), so a
 // future-version manifest reads fine here. The version guard fires
@@ -79,11 +80,12 @@ func Load(ctx context.Context, store r2.Storage) (*model.Manifest, error) {
 		}
 		bakM, bakDecodeErr := Decode(bytes.NewReader(bakBytes))
 		if bakDecodeErr != nil {
-			return nil, fmt.Errorf(
-				"manifest: %s failed to decode (%v); backup %s also corrupt (%v); manual inspection required",
-				PrimaryKey, decodeErr, BackupKey, bakDecodeErr,
-			)
+			return nil, dualCorruptionError(decodeErr, bakDecodeErr)
 		}
+		slog.Warn("manifest: primary corrupt; using backup",
+			"primary_key", PrimaryKey,
+			"backup_key", BackupKey,
+			"primary_error", decodeErr.Error())
 		return bakM, nil
 	}
 }
@@ -151,4 +153,11 @@ func Save(ctx context.Context, store r2.Storage, m *model.Manifest) error {
 		return fmt.Errorf("manifest: save: put %s: %w", PrimaryKey, err)
 	}
 	return nil
+}
+
+func dualCorruptionError(primaryErr, backupErr error) error {
+	return fmt.Errorf(
+		"manifest: both %s and %s are corrupt; refusing to overwrite. Inspect via:\n  mc cat r2/wiki-audio/%s\n  mc cat r2/wiki-audio/%s\n(primary error: %v; backup error: %v)",
+		PrimaryKey, BackupKey, PrimaryKey, BackupKey, primaryErr, backupErr,
+	)
 }
