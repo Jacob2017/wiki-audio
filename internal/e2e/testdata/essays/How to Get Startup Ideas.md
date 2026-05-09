@@ -1,19 +1,13 @@
-# How to Get Startup Ideas
-
-## Metadata
-- Author: [[Paul Graham]]
-- Full Title: How to Get Startup Ideas
-- Category: #articles
-- URL: https://www.paulgraham.com/startupideas.html
-
-## Full Document
-Here is a tiny illustrative snippet — the audio extractor must drop it:
-
-```python
-def example():
-    return 'this should not be read aloud'
-```
-
+---
+title: "How to Get Startup Ideas"
+source: "https://www.paulgraham.com/startupideas.html"
+author:
+published:
+created: 2026-05-08
+description:
+tags:
+  - "clippings"
+---
 **Want to start a startup?** Get funded by [Y Combinator](http://ycombinator.com/apply.html).  
 
 November 2012  

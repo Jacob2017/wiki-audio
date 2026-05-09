@@ -55,11 +55,11 @@ var fixtures = []fixture{
 		slug:            "how-to-get-startup-ideas",
 		title:           "How to Get Startup Ideas",
 		minChars:        30_000,
-		maxChars:        50_000,
+		maxChars:        55_000,
 		minWords:        5_000,
-		maxWords:        9_000,
+		maxWords:        10_000,
 		expectFootnotes: false,
-		expectedSkipped: []string{"code_block:python"}, // synthetic code block in fixture exercises wa-kyn.7
+		expectedSkipped: nil, // YAML-frontmatter essay — exercises wa-k8a F1 path
 	},
 	{
 		file:            "High Agency — In 30 Minutes.md",

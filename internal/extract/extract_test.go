@@ -46,8 +46,13 @@ func TestParse_CanonicalEssay(t *testing.T) {
 	if !strings.Contains(got.RawBody, "July 2023") {
 		t.Errorf("RawBody should contain body content: %q", got.RawBody)
 	}
-	if !strings.Contains(got.RawBody, "# How to Do Great Work") {
-		t.Errorf("RawBody should preserve the # title heading line: %q", got.RawBody)
+	// wa-k8a F2: the `# Title` line is now dropped from RawBody so
+	// TTS does not read the title twice (once from ID3, once from
+	// the body). Content ABOVE the title that survives Readwise
+	// stripping (e.g. the rw-book-cover image ref) still passes
+	// through; later steps (wa-kyn.7 StripMarkdown) drop the image.
+	if strings.Contains(got.RawBody, "# How to Do Great Work") {
+		t.Errorf("RawBody should NOT contain the # title heading line (wa-k8a F2): %q", got.RawBody)
 	}
 	if !strings.Contains(got.RawBody, "![rw-book-cover]") {
 		t.Errorf("RawBody should preserve content above '## Metadata': %q", got.RawBody)
@@ -148,13 +153,19 @@ func TestParse_PreservesContentAboveMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idxTitle := strings.Index(got.RawBody, "# How to Do Great Work")
-	idxBody := strings.Index(got.RawBody, "July 2023")
-	if idxTitle == -1 || idxBody == -1 {
-		t.Fatalf("expected both title and body in RawBody: %q", got.RawBody)
+	// wa-k8a F2: the # Title line is dropped, but content between
+	// the title and the metadata block (e.g. the rw-book-cover
+	// image ref) survives the Readwise header strip.
+	if strings.Contains(got.RawBody, "# How to Do Great Work") {
+		t.Errorf("# title line should be dropped (F2); got %q", got.RawBody)
 	}
-	if idxTitle >= idxBody {
-		t.Errorf("title heading should appear before body content")
+	idxCover := strings.Index(got.RawBody, "![rw-book-cover]")
+	idxBody := strings.Index(got.RawBody, "July 2023")
+	if idxCover == -1 || idxBody == -1 {
+		t.Fatalf("expected cover-image and body in RawBody: %q", got.RawBody)
+	}
+	if idxCover >= idxBody {
+		t.Errorf("content above ## Metadata should appear before body content")
 	}
 }
 
@@ -197,6 +208,96 @@ func TestTitleCaseFromFilename(t *testing.T) {
 		if got != c.want {
 			t.Errorf("titleCaseFromFilename(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// --- F1: YAML frontmatter parsing (wa-k8a) ------------------------------
+
+func TestParse_YAMLFrontmatterAccepted(t *testing.T) {
+	const fmEssay = `---
+title: "How to Get Startup Ideas"
+source: "https://www.paulgraham.com/startupideas.html"
+author:
+created: 2026-05-08
+tags:
+  - "clippings"
+---
+**Want to start a startup?** Get funded by [Y Combinator](http://ycombinator.com/apply.html).
+
+November 2012
+
+The way to get startup ideas is not to try to think of startup ideas.
+`
+	got, err := Parse(fmEssay, "How to Get Startup Ideas.md")
+	if err != nil {
+		t.Fatalf("YAML frontmatter should be accepted: %v", err)
+	}
+	if got.Title != "How to Get Startup Ideas" {
+		t.Errorf("Title from YAML = %q; want %q", got.Title, "How to Get Startup Ideas")
+	}
+	if strings.Contains(got.RawBody, "title:") || strings.Contains(got.RawBody, "tags:") {
+		t.Errorf("RawBody should not contain frontmatter keys; got %q", got.RawBody)
+	}
+	if strings.Contains(got.RawBody, "---") {
+		t.Errorf("RawBody should not contain --- fence; got %q", got.RawBody)
+	}
+	if !strings.Contains(got.RawBody, "November 2012") {
+		t.Errorf("body content should survive: %q", got.RawBody)
+	}
+}
+
+func TestParse_YAMLFrontmatterFallsBackToFilenameWhenNoTitleKey(t *testing.T) {
+	const fmEssay = `---
+source: "https://example.com"
+created: 2026-05-08
+---
+Body content here.
+`
+	got, err := Parse(fmEssay, "some-essay.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Some Essay" {
+		t.Errorf("Title fallback under YAML-without-title = %q; want %q", got.Title, "Some Essay")
+	}
+}
+
+func TestParse_NeitherHeaderShapeReturnsError(t *testing.T) {
+	plain := "Just some text with no headers and no fences.\n"
+	_, err := Parse(plain, "x.md")
+	if err == nil {
+		t.Fatal("expected error for plain content with no headers")
+	}
+	if !strings.Contains(err.Error(), "Readwise") || !strings.Contains(err.Error(), "YAML") {
+		t.Errorf("error should name both expected formats; got %q", err.Error())
+	}
+}
+
+func TestParse_YAMLFrontmatterUnclosedFenceReturnsError(t *testing.T) {
+	unclosed := "---\ntitle: Foo\nsource: x\nbody body body\n"
+	_, err := Parse(unclosed, "x.md")
+	if err == nil {
+		t.Fatal("expected error for YAML frontmatter with no closing fence")
+	}
+}
+
+// --- F2: # Title line dropped from RawBody (wa-k8a) ---------------------
+
+func TestParse_TitleLineDroppedFromBody(t *testing.T) {
+	got, err := Parse(canonicalEssay, "x.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{
+		"# How to Do Great Work",
+		"#How to Do Great Work",
+	} {
+		if strings.Contains(got.RawBody, leaked) {
+			t.Errorf("F2: title heading %q should be dropped; body %q", leaked, got.RawBody)
+		}
+	}
+	if got.Title != "How to Do Great Work" {
+		t.Errorf("Title should still be captured; got %q", got.Title)
 	}
 }
 

@@ -6,10 +6,21 @@ import (
 )
 
 var (
-	// imageRe matches "![alt](url)" non-greedily on a single line.
-	// alt cannot contain "]" and url cannot contain ")"; the simple
-	// form is sufficient for the Readwise/PG corpus.
-	imageRe = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	// imageRe matches "![alt](url)" on a single line, tolerating one
+	// level of nested parens inside the URL (wa-k8a F3). PG / Substack
+	// CDN URLs sometimes embed parens in the path
+	// (e.g. ".../High%20Agency%20(2).png"); the v1 regex stopped at
+	// the first ")" and left ".png)" debris behind.
+	//
+	// Pattern parts:
+	//   - !\[[^\]]*\]   — image alt prefix
+	//   - \(            — opening paren of the URL
+	//   - (?:           — alternation, greedy
+	//       [^()\n]     —   any char except parens or newline
+	//     | \([^)\n]*\) —   OR a balanced (...) group of one level
+	//     )*
+	//   - \)            — closing paren of the URL
+	imageRe = regexp.MustCompile(`!\[[^\]]*\]\((?:[^()\n]|\([^)\n]*\))*\)`)
 
 	// linkRe matches "[text](url)". Note: a PG-style footnote ref
 	// "[[3](url)]" is matched by linkRe at the inner "[3](url)"

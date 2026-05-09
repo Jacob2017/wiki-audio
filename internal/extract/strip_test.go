@@ -25,6 +25,40 @@ func TestStripMarkdown_ImagesRemovedEntirely(t *testing.T) {
 	}
 }
 
+// --- F3: image regex tolerates one level of nested parens (wa-k8a) -------
+
+func TestStripMarkdown_ImageRefWithParensInURL(t *testing.T) {
+	cases := []struct {
+		in, want string
+		desc     string
+	}{
+		{
+			in:   "![rw-book-cover](https://cdn.example.com/High%20Agency%20(2).png)",
+			want: "",
+			desc: "Substack-style URL with embedded (2)",
+		},
+		{
+			in:   "before ![alt](path/file(v1).jpg) after",
+			want: "before  after",
+			desc: "single-level nested parens preserved through strip",
+		},
+		{
+			in:   "![alt](u) and (something) more",
+			want: " and (something) more",
+			desc: "regex must NOT over-eat past trailing prose parens",
+		},
+	}
+	for _, c := range cases {
+		got, _ := StripMarkdown(c.in)
+		if got != c.want {
+			t.Errorf("F3 %s: StripMarkdown(%q) = %q; want %q", c.desc, c.in, got, c.want)
+		}
+		if strings.Contains(got, ".png)") || strings.Contains(got, ".jpg)") {
+			t.Errorf("F3 %s: image-strip debris left behind: %q", c.desc, got)
+		}
+	}
+}
+
 func TestStripMarkdown_LinkKeepsTextDropsURL(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"[click here](https://example.com)", "click here"},
