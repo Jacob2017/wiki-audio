@@ -134,8 +134,18 @@ func containsField(b []byte, key string) bool {
 }
 
 func TestManifestSchemaVersionPinned(t *testing.T) {
-	if ManifestSchemaVersion != 1 {
-		t.Fatalf("ManifestSchemaVersion = %d; bumping is a deliberate breaking change — update §6 and add a migration", ManifestSchemaVersion)
+	// Version history (kept here so a future PR has the migration log
+	// in the same diff that touches the constant):
+	//   1 — initial shape (wa-76r.1).
+	//   2 — ManifestEntry gains SourceURL + Description (wa-bo5
+	//       castfeedvalidator-driven feed enrichments). Optional
+	//       fields with omitempty; backward-compatible on disk per
+	//       wa-76r.1's bumping policy.
+	const expected = 2
+	if ManifestSchemaVersion != expected {
+		t.Fatalf("ManifestSchemaVersion = %d (expected %d); bumping is a deliberate breaking change — "+
+			"update this test's expected value AND the version-history comment block, and "+
+			"add a migration note to §6 of PLAN_FOR_AUDIO_LIBRARY.md", ManifestSchemaVersion, expected)
 	}
 }
 

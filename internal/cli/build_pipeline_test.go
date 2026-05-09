@@ -79,8 +79,11 @@ func TestReadLocalManifestExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLocalManifest: %v", err)
 	}
-	if m.Version != 1 {
-		t.Errorf("Version: got %d", m.Version)
+	// Auto-upgrade: a v1 file on disk loads as the current schema
+	// version (wa-bo5; wa-76r.1 bumping policy — additions are
+	// backward-compatible because new fields are omitempty).
+	if m.Version != model.ManifestSchemaVersion {
+		t.Errorf("Version: got %d, want %d (auto-upgrade from on-disk v1)", m.Version, model.ManifestSchemaVersion)
 	}
 	entry, ok := m.Entries["alpha"]
 	if !ok {
@@ -88,6 +91,13 @@ func TestReadLocalManifestExistingFile(t *testing.T) {
 	}
 	if entry.BodyHash != "abc123" {
 		t.Errorf("BodyHash = %q", entry.BodyHash)
+	}
+	// New optional fields default to empty on auto-upgrade.
+	if entry.SourceURL != "" {
+		t.Errorf("SourceURL on auto-upgraded entry should be empty; got %q", entry.SourceURL)
+	}
+	if entry.Description != "" {
+		t.Errorf("Description on auto-upgraded entry should be empty; got %q", entry.Description)
 	}
 }
 
@@ -234,6 +244,48 @@ func TestYearForEssay(t *testing.T) {
 		if got := yearForEssay(c.in); got != c.want {
 			t.Errorf("yearForEssay(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// --- clampDescription (wa-bo5) ---
+
+func TestClampDescription(t *testing.T) {
+	short := "Short summary."
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", "   \n\t ", ""},
+		{"short passes through", short, short},
+		{"trims surrounding whitespace", "  hello.  ", "hello."},
+		{"long sentence-boundary", strings.Repeat("a ", 200) + "stop. " + strings.Repeat("b ", 200),
+			strings.TrimSpace(strings.Repeat("a ", 200) + "stop.")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := clampDescription(c.in)
+			if got != c.want {
+				t.Errorf("clampDescription(%q) =\n  got  %q\n  want %q", c.in, got, c.want)
+			}
+			if len(got) > 500 {
+				t.Errorf("output exceeds 500 chars (got %d)", len(got))
+			}
+		})
+	}
+}
+
+// No sentence boundary in the cut window → fall back to last word
+// + ellipsis. Pins the fallback so a future change must update both.
+func TestClampDescription_NoSentenceBoundary(t *testing.T) {
+	in := strings.Repeat("word ", 200) // 1000 chars, no .!?
+	got := clampDescription(in)
+	if len(got) > 500 {
+		t.Errorf("len(got)=%d exceeds 500", len(got))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected trailing ellipsis on no-boundary fallback; got %q", got)
 	}
 }
 

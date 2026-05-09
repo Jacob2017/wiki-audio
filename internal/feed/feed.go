@@ -21,10 +21,25 @@ const (
 )
 
 // DefaultCategory is the v1 fallback for the channel-level
-// `<itunes:category text="...">`. PLAN §10 doesn't pin a category;
-// Apple's category list is non-extensible, so a literal that exists
-// in their taxonomy is safer than inventing one.
+// `<itunes:category text="...">` when no Categories slice is set.
+// PLAN §10 doesn't pin a category; Apple's category list is
+// non-extensible, so a literal that exists in their taxonomy is
+// safer than inventing one.
+//
+// Kept for backward compatibility with the wa-i1l.5 single-category
+// signature; new callers should populate Channel.Categories with the
+// triple from model.DefaultFeedCategories. wa-bo5 added multi-cat
+// because castfeedvalidator wants ≥3 categories with at least one
+// subcategory.
 const DefaultCategory = "Technology"
+
+// PodcastTypeEpisodic is the canonical `<itunes:type>` value for a
+// non-serial podcast. PG essays are independent — listeners can pick
+// any episode as an entry point — so this is correct. The
+// alternative ("serial") tells podcast apps to play in chronological
+// order from episode 1 forward; that's wrong for an essay collection
+// (wa-bo5).
+const PodcastTypeEpisodic = "episodic"
 
 // Channel describes the podcast at the channel level. Caller fills it
 // from FeedConfig (model.FeedConfig) plus the canonical self-link URL.
@@ -47,14 +62,38 @@ type Channel struct {
 	// wa-i1l.6 supplies this with `?t=<token>` already appended.
 	SelfLinkURL string
 
-	// CoverImage is the optional `<itunes:image href="...">`. Empty
-	// means omit the element. Cover art is deferred for v1 per §10;
-	// callers can ship without it.
+	// CoverImage is the channel-level `<itunes:image href="...">` URL.
+	// When set, also emitted as a per-item `<itunes:image href="...">`
+	// (same URL — one cover for every episode in v1; per-episode
+	// artwork is a future-bead concern). Empty means omit at both
+	// levels. The token-stamping layer (token.go) extends `?t=<token>`
+	// onto every itunes:image href just as it does for enclosures.
 	CoverImage string
 
-	// Category is the `<itunes:category text="...">` value. Empty →
-	// DefaultCategory.
+	// Category is the legacy single-category field. Set Categories
+	// instead; this is preserved only so wa-i1l.5's existing tests
+	// keep compiling.
+	//
+	// Resolution order: if Categories is non-empty, render it. Else
+	// if Category is set, wrap as a single entry. Else fall back to
+	// model.DefaultFeedCategories (the wa-bo5 triple).
 	Category string
+
+	// Categories is the iTunes category structure with optional
+	// subcategory per parent. Each inner slice is `[parent]` or
+	// `[parent, sub]`; longer slices are truncated. wa-bo5: Apple
+	// wants ≥3 categories with at least one subcategory.
+	Categories [][]string
+
+	// PodcastType is the `<itunes:type>` value. Empty → omit
+	// (avoids forcing the field on legacy callers); wa-bo5 callers
+	// pass PodcastTypeEpisodic.
+	PodcastType string
+
+	// Copyright is the channel-level `<copyright>` element. Empty →
+	// omit (PG owns the essay copyright; we don't claim it). Operator
+	// opts in by setting e.g. "Audio rendering © Jacob Byrne 2026".
+	Copyright string
 }
 
 // Generate emits an iTunes-namespaced RSS 2.0 XML document.
@@ -92,11 +131,6 @@ func Generate(
 	eligible := filterEligible(entries)
 	sortByPubDateDesc(eligible)
 
-	cat := channel.Category
-	if cat == "" {
-		cat = DefaultCategory
-	}
-
 	r := rssRoot{
 		Version:     "2.0",
 		XMLNSItunes: NSItunes,
@@ -106,6 +140,7 @@ func Generate(
 			Link:        channel.Link,
 			Description: channel.Description,
 			Language:    channel.Language,
+			Copyright:   channel.Copyright, // omitempty — empty omits the element
 			AtomLink: atomLinkXML{
 				Rel:  "self",
 				Type: "application/rss+xml",
@@ -116,8 +151,9 @@ func Generate(
 				Name:  itunesNameXML{Value: channel.Author},
 				Email: itunesEmailXML{Value: channel.OwnerEmail},
 			},
-			ItunesExplicit: itunesExplicitXML{Value: "false"},
-			ItunesCategory: itunesCategoryXML{Text: cat},
+			ItunesExplicit:   itunesExplicitXML{Value: "false"},
+			ItunesType:       channel.PodcastType, // omitempty — empty omits
+			ItunesCategories: resolveCategories(channel),
 		},
 	}
 	if channel.CoverImage != "" {
@@ -127,8 +163,9 @@ func Generate(
 	r.Channel.Items = make([]itemXML, 0, len(eligible))
 	for _, e := range eligible {
 		url := enclosureURL(e)
-		r.Channel.Items = append(r.Channel.Items, itemXML{
+		item := itemXML{
 			Title: e.Title,
+			Link:  e.SourceURL, // omitempty — empty omits per wa-bo5 (#5)
 			Enclosure: enclosureXML{
 				URL:    url,
 				Length: e.FileSizeBytes,
@@ -143,11 +180,16 @@ func Generate(
 			ItunesAuthor:   itunesAuthorXML{Value: channel.Author},
 			ItunesDuration: itunesDurationXML{Value: int(e.DurationSeconds + 0.5)},
 			ItunesExplicit: itunesExplicitXML{Value: "false"},
-			// v1: no per-item description. ManifestEntry doesn't
-			// carry PublishDateText; per-item summaries land in a
-			// follow-up bead alongside cover art (§10 deferral).
-			Description: "",
-		})
+			Description:    e.Description, // omitempty — empty omits per wa-bo5 (#6)
+		}
+		// Per-item itunes:image — same URL as the channel cover by
+		// default (one cover for every episode in v1). Per-episode
+		// artwork is a future-bead extension; at that point this
+		// branch reads from a per-entry field.
+		if channel.CoverImage != "" {
+			item.ItunesImage = &itunesImageXML{Href: channel.CoverImage}
+		}
+		r.Channel.Items = append(r.Channel.Items, item)
 	}
 
 	var buf bytes.Buffer
@@ -210,6 +252,49 @@ func filterEligible(entries []model.ManifestEntry) []model.ManifestEntry {
 	return out
 }
 
+// resolveCategories collapses the three category sources (Channel
+// .Categories, the legacy single Channel.Category, and
+// model.DefaultFeedCategories) into the slice the channelXML render
+// actually uses. Resolution order:
+//
+//  1. If Channel.Categories is non-empty → use it verbatim.
+//  2. Else if Channel.Category is set → wrap as `[][]string{{cat}}`
+//     for backward-compat with the wa-i1l.5 single-category signature.
+//  3. Else fall back to model.DefaultFeedCategories (the wa-bo5
+//     triple).
+//
+// Each inner slice is treated as [parent] or [parent, sub]; longer
+// slices are silently truncated to the first two elements (Apple's
+// taxonomy doesn't support deeper nesting).
+func resolveCategories(c Channel) []itunesCategoryXML {
+	source := c.Categories
+	if len(source) == 0 && c.Category != "" {
+		source = [][]string{{c.Category}}
+	}
+	if len(source) == 0 {
+		source = model.DefaultFeedCategories
+	}
+	out := make([]itunesCategoryXML, 0, len(source))
+	for _, row := range source {
+		if len(row) == 0 || row[0] == "" {
+			continue
+		}
+		entry := itunesCategoryXML{Text: row[0]}
+		if len(row) >= 2 && row[1] != "" {
+			entry.Sub = &itunesCategoryXML{Text: row[1]}
+		}
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		// All rows were empty (operator passed `[]` explicitly, or
+		// every row was nil). Fall back rather than emit zero
+		// categories — Apple requires ≥1 even if validator only
+		// strongly recommends ≥3.
+		out = append(out, itunesCategoryXML{Text: DefaultCategory})
+	}
+	return out
+}
+
 // sortByPubDateDesc sorts in place; newest first per PLAN §5.5.
 // Stable sort with an explicit slug tie-break keeps the output
 // byte-stable across regenerations (wa-hv6 [LOW] item-ordering).
@@ -243,17 +328,19 @@ type rssRoot struct {
 }
 
 type channelXML struct {
-	Title          string            `xml:"title"`
-	Link           string            `xml:"link"`
-	AtomLink       atomLinkXML       `xml:"atom:link"`
-	Description    string            `xml:"description"`
-	Language       string            `xml:"language"`
-	ItunesAuthor   itunesAuthorXML   `xml:"itunes:author"`
-	ItunesOwner    *itunesOwnerXML   `xml:"itunes:owner,omitempty"`
-	ItunesExplicit itunesExplicitXML `xml:"itunes:explicit"`
-	ItunesCategory itunesCategoryXML `xml:"itunes:category"`
-	ItunesImage    *itunesImageXML   `xml:"itunes:image,omitempty"`
-	Items          []itemXML         `xml:"item"`
+	Title            string              `xml:"title"`
+	Link             string              `xml:"link"`
+	AtomLink         atomLinkXML         `xml:"atom:link"`
+	Description      string              `xml:"description"`
+	Language         string              `xml:"language"`
+	Copyright        string              `xml:"copyright,omitempty"`
+	ItunesAuthor     itunesAuthorXML     `xml:"itunes:author"`
+	ItunesOwner      *itunesOwnerXML     `xml:"itunes:owner,omitempty"`
+	ItunesExplicit   itunesExplicitXML   `xml:"itunes:explicit"`
+	ItunesType       string              `xml:"itunes:type,omitempty"`
+	ItunesCategories []itunesCategoryXML `xml:"itunes:category"`
+	ItunesImage      *itunesImageXML     `xml:"itunes:image,omitempty"`
+	Items            []itemXML           `xml:"item"`
 }
 
 type atomLinkXML struct {
@@ -284,7 +371,8 @@ type itunesExplicitXML struct {
 }
 
 type itunesCategoryXML struct {
-	Text string `xml:"text,attr"`
+	Text string             `xml:"text,attr"`
+	Sub  *itunesCategoryXML `xml:"itunes:category,omitempty"`
 }
 
 type itunesImageXML struct {
@@ -300,12 +388,14 @@ type itunesDurationXML struct {
 
 type itemXML struct {
 	Title          string            `xml:"title"`
+	Link           string            `xml:"link,omitempty"`
 	Enclosure      enclosureXML      `xml:"enclosure"`
 	Guid           guidXML           `xml:"guid"`
 	PubDate        string            `xml:"pubDate"`
 	ItunesAuthor   itunesAuthorXML   `xml:"itunes:author"`
 	ItunesDuration itunesDurationXML `xml:"itunes:duration"`
 	ItunesExplicit itunesExplicitXML `xml:"itunes:explicit"`
+	ItunesImage    *itunesImageXML   `xml:"itunes:image,omitempty"`
 	Description    string            `xml:"description,omitempty"`
 }
 

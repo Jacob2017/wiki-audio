@@ -253,6 +253,8 @@ func runPublishCore(
 		}
 	}
 
+	overlayLocalFeedFields(mft, logger)
+
 	feedXML, err := buildFeed(mft, cfg, token)
 	if err != nil {
 		return fmt.Errorf("publish: feed: %w", err)
@@ -349,6 +351,8 @@ func runPublishFeedOnlyTail(
 	mft *model.Manifest,
 	logger *slog.Logger,
 ) error {
+	overlayLocalFeedFields(mft, logger)
+
 	feedXML, err := buildFeed(mft, cfg, token)
 	if err != nil {
 		return fmt.Errorf("publish: feed: %w", err)
@@ -493,6 +497,46 @@ func feedItemCount(mft *model.Manifest) int {
 	return n
 }
 
+// overlayLocalFeedFields patches per-essay feed fields (SourceURL,
+// Description) on every entry in mft from the cached local manifest
+// (~/.cache/wiki-audio/manifest.json), if one exists. The publish
+// flow's source-of-truth is R2, but the build pipeline writes the
+// locally-derived feed fields to the local manifest first; without
+// this overlay, a publish regenerates pg.xml without per-item
+// <link>/<description> on entries whose R2-side manifest predates
+// wa-bo5.
+//
+// The overlay is best-effort: if the local manifest is missing,
+// unreadable, or lacks an entry for the slug, mft is left unchanged
+// for that slug. Only the two wa-bo5 fields are overlaid — the rest
+// (R2Key/R2ETag/PublishedAt/etc.) is owned by the publish path.
+//
+// This is the surgical fix for wa-bo5's bundled re-publish; a fuller
+// "merge local entries that R2 doesn't know about yet" sync belongs
+// to pane-9's r2/manifest area.
+func overlayLocalFeedFields(mft *model.Manifest, logger *slog.Logger) {
+	manifestPath := cache.Dir() + "/manifest.json"
+	local, err := readLocalManifest(manifestPath)
+	if err != nil {
+		logger.Warn("overlay: local manifest unreadable; live feed will lack per-item link/description until next build",
+			"path", manifestPath, "err", err.Error())
+		return
+	}
+	for slug, r2Entry := range mft.Entries {
+		localEntry, ok := local.Entries[slug]
+		if !ok {
+			continue
+		}
+		if r2Entry.SourceURL == "" && localEntry.SourceURL != "" {
+			r2Entry.SourceURL = localEntry.SourceURL
+		}
+		if r2Entry.Description == "" && localEntry.Description != "" {
+			r2Entry.Description = localEntry.Description
+		}
+		mft.Entries[slug] = r2Entry
+	}
+}
+
 // buildFeed materializes the channel struct from FeedConfig, calls
 // feed.Generate, then layers feed.StampTokens. Pulled out so
 // runPublishCore stays orchestration-only.
@@ -510,6 +554,9 @@ func buildFeed(mft *model.Manifest, cfg *model.Config, token string) ([]byte, er
 		Link:        cfg.Feed.BaseURL,
 		SelfLinkURL: selfLink,
 		CoverImage:  cfg.Feed.CoverImageURL,
+		PodcastType: feed.PodcastTypeEpisodic,
+		Categories:  cfg.Feed.Categories,
+		Copyright:   cfg.Feed.Copyright,
 	}
 	entries := make([]model.ManifestEntry, 0, len(mft.Entries))
 	for _, e := range mft.Entries {

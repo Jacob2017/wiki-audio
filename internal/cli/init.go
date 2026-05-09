@@ -55,11 +55,32 @@ bucket = ""
 # Public Worker URL that fronts the R2 bucket. Must include scheme.
 # Production hosts MUST use https:// for transport security.
 base_url = "https://wiki-audio.example.workers.dev"
-title = "PG Essays"
-description = "Paul Graham essays read aloud."
-author = "Paul Graham"
+title = "Audio Essays"
+description = "Long-form essays read aloud."
+author = "Audio Essays"
 owner_email = ""
-# Optional: cover_image_url = "https://..."
+# Optional. Required for podcast directories; uploaded to R2 alongside
+# the feed. Omit the ?t= token — the publish path stamps it. Apple
+# spec: 1400×1400 to 3000×3000 JPG/PNG, RGB.
+# cover_image_url = "https://wiki-audio.example.workers.dev/pg/cover.jpg"
+#
+# Optional. Override the channel categories. Each entry is a
+# [parent] or [parent, sub] pair from Apple's published taxonomy
+# (https://podcasters.apple.com/support/1691-apple-podcasts-categories).
+# Defaults to ["Technology"], ["Education", "Self-Improvement"],
+# ["Business", "Entrepreneurship"]; submit at least three for the
+# best directory placement.
+# categories = [
+#     ["Technology"],
+#     ["Education", "Self-Improvement"],
+#     ["Business", "Entrepreneurship"],
+# ]
+#
+# Optional. Free-text copyright notice for the audio rendering
+# (the per-essay copyright stays with the original author). Emitted
+# verbatim into <copyright>; omit to skip the element entirely.
+# copyright = "Audio rendering © 2026 Operator"
+#
 # Defaults applied when omitted: feed_path="pg.xml", language="en-us".
 `
 

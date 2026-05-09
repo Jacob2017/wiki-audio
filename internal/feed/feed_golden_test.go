@@ -39,6 +39,14 @@ func goldenFixtureChannel() Channel {
 		Language:    "en-us",
 		Link:        "https://feed.example.test",
 		SelfLinkURL: "https://feed.example.test/pg.xml?t=GOLDEN",
+		CoverImage:  "https://feed.example.test/pg/cover.jpg",
+		PodcastType: PodcastTypeEpisodic,
+		Copyright:   "Audio rendering © Operator 2026",
+		Categories: [][]string{
+			{"Technology"},
+			{"Education", "Self-Improvement"},
+			{"Business", "Entrepreneurship"},
+		},
 	}
 }
 
@@ -52,10 +60,22 @@ func goldenFixtureEntries() []model.ManifestEntry {
 	pubGreatWork := time.Date(2026, 5, 8, 14, 21, 3, 0, time.UTC)
 	pubStartupIdeas := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
 	pubHighAgency := time.Date(2026, 5, 10, 9, 30, 0, 0, time.UTC)
+
+	withMeta := func(e model.ManifestEntry, sourceURL, desc string) model.ManifestEntry {
+		e.SourceURL = sourceURL
+		e.Description = desc
+		return e
+	}
 	return []model.ManifestEntry{
-		entry("how-to-do-great-work", "How to Do Great Work", 3664.27, 58629016, pubGreatWork),
-		entry("how-to-get-startup-ideas", "How to Get Startup Ideas", 1800, 24000000, pubStartupIdeas),
-		entry("high-agency-in-30-minutes", "High Agency", 1500, 18000000, pubHighAgency),
+		withMeta(entry("how-to-do-great-work", "How to Do Great Work", 3664.27, 58629016, pubGreatWork),
+			"http://paulgraham.com/greatwork.html",
+			"What it takes to do great work in any field, distilled into a long letter to a young person figuring out what to aim at. Originally published July 2023."),
+		withMeta(entry("how-to-get-startup-ideas", "How to Get Startup Ideas", 1800, 24000000, pubStartupIdeas),
+			"http://paulgraham.com/startupideas.html",
+			"The way to get startup ideas is not to try to think of startup ideas. Notice problems. Originally published November 2012."),
+		withMeta(entry("high-agency-in-30-minutes", "High Agency", 1500, 18000000, pubHighAgency),
+			"",
+			"A short field guide to recognizing and developing high agency."),
 	}
 }
 

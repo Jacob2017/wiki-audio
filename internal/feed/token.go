@@ -16,12 +16,16 @@ const accessTokenEnvVar = "WIKI_AUDIO_ACCESS_TOKEN"
 var (
 	enclosureStartTagRe = regexp.MustCompile(`<enclosure\b[^>]*>`)
 	atomSelfLinkTagRe   = regexp.MustCompile(`<atom:link\b[^>]*\brel="self"[^>]*>`)
+	itunesImageTagRe    = regexp.MustCompile(`<itunes:image\b[^>]*>`) // wa-bo5
 	urlAttrRe           = regexp.MustCompile(`\burl="([^"]*)"`)
 	hrefAttrRe          = regexp.MustCompile(`\bhref="([^"]*)"`)
 )
 
-// StampTokens appends `t=<token>` to the feed self-link and every
-// enclosure URL in a generated RSS document.
+// StampTokens appends `t=<token>` to the feed self-link, every
+// enclosure URL, and every `<itunes:image href="...">` URL in a
+// generated RSS document. The itunes:image rewrites are wa-bo5 —
+// without them, podcast clients would 403 trying to fetch the
+// channel/per-item cover art (R2 is gated by the same Worker token).
 //
 // Empty token is treated as a caller bug but not a hard error here:
 // the function logs a warning and returns the input bytes unchanged.
@@ -39,6 +43,13 @@ func StampTokens(feedXML []byte, token string) []byte {
 		return stampAttr(tag, urlAttrRe, token)
 	})
 	out = atomSelfLinkTagRe.ReplaceAllFunc(out, func(tag []byte) []byte {
+		return stampAttr(tag, hrefAttrRe, token)
+	})
+	// itunes:image href — channel-level + per-item. Apply AFTER the
+	// atom:link pass because both use href; the atom regex requires
+	// `rel="self"` so they don't overlap, but ordering ensures we
+	// don't accidentally double-stamp.
+	out = itunesImageTagRe.ReplaceAllFunc(out, func(tag []byte) []byte {
 		return stampAttr(tag, hrefAttrRe, token)
 	})
 	return out

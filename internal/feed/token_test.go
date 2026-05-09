@@ -139,6 +139,77 @@ func TestStampTokensFromEnv_EmptyTokenErrors(t *testing.T) {
 	}
 }
 
+// wa-bo5: itunes:image href is also gated by the Worker token
+// (R2 fronts the cover art), so StampTokens must rewrite it just like
+// enclosure URLs and the atom:link self URL. Without the rewrite, a
+// podcast client would 403 fetching channel artwork.
+func TestStampTokens_StampsItunesImage(t *testing.T) {
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	ch := fixtureChannel()
+	ch.SelfLinkURL = "https://feed.example.test/pg.xml"
+	ch.CoverImage = "https://feed.example.test/pg/cover.jpg"
+
+	entries := []model.ManifestEntry{
+		entry("essay-1", "Essay 1", 60, 1000, pub),
+		entry("essay-2", "Essay 2", 60, 1000, pub.Add(time.Second)),
+	}
+
+	feedXML, err := Generate(ch, entries, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	// Sanity: pre-stamp, the cover URL is bare (no ?t=).
+	if !strings.Contains(string(feedXML), `<itunes:image href="https://feed.example.test/pg/cover.jpg">`) {
+		t.Fatalf("pre-stamp: itunes:image with bare URL missing\n%s", feedXML)
+	}
+
+	stamped := string(StampTokens(feedXML, "img-token"))
+
+	// 1 channel itunes:image + N item itunes:image. The token-stamped
+	// href appears once per occurrence; un-stamped href must NOT
+	// remain.
+	want := `<itunes:image href="https://feed.example.test/pg/cover.jpg?t=img-token">`
+	got := strings.Count(stamped, want)
+	if got != 1+len(entries) {
+		t.Errorf("stamped itunes:image count: got %d, want %d (1 channel + %d items)\n%s",
+			got, 1+len(entries), len(entries), stamped)
+	}
+	if strings.Contains(stamped, `<itunes:image href="https://feed.example.test/pg/cover.jpg">`) {
+		t.Errorf("found un-stamped itunes:image href after StampTokens — token rewrite missed an element\n%s", stamped)
+	}
+}
+
+// itunes:image href and atom:link self href both use `href="..."`. The
+// rewrite passes are ordered so atom:link runs before itunes:image,
+// and atom:link's regex requires `rel="self"` — verifying here that
+// the self link does NOT acquire a duplicate `?t=` after the
+// itunes:image pass.
+func TestStampTokens_NoDoubleStampWhenBothHrefsPresent(t *testing.T) {
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	ch := fixtureChannel()
+	ch.SelfLinkURL = "https://feed.example.test/pg.xml"
+	ch.CoverImage = "https://feed.example.test/pg/cover.jpg"
+
+	feedXML, err := Generate(ch, []model.ManifestEntry{entry("essay", "Essay", 60, 1000, pub)}, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	stamped := string(StampTokens(feedXML, "tok"))
+	// `t=tok` should appear exactly once per stampable URL: 1 self
+	// link + 1 channel image + 1 per-item image + 1 enclosure = 4.
+	got := strings.Count(stamped, "t=tok")
+	if got != 4 {
+		t.Errorf("expected exactly 4 token occurrences (self + channel-image + item-image + enclosure); got %d\n%s", got, stamped)
+	}
+	// Specifically guard against a double-stamped self link with
+	// `t=tok&amp;t=tok` — the cheapest way to detect ordering bugs.
+	if strings.Contains(stamped, "t=tok&amp;t=") || strings.Contains(stamped, "t=tok&t=") {
+		t.Errorf("double-stamped token appears in output:\n%s", stamped)
+	}
+}
+
 func TestStampTokensFromEnv_ReadsEnv(t *testing.T) {
 	t.Setenv(accessTokenEnvVar, "env-token")
 	out, err := StampTokensFromEnv([]byte(`<rss><channel><atom:link rel="self" href="https://feed.example.test/pg.xml"></atom:link></channel></rss>`))

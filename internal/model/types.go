@@ -13,6 +13,12 @@ type EssayMeta struct {
 	SourcePath      string `json:"source_path"`
 	SourceURL       string `json:"source_url,omitempty"`
 	PublishDateText string `json:"publish_date_text,omitempty"`
+
+	// Summary is the Readwise-bullet "Summary:" line, used by the
+	// publish path as the per-item `<description>` (wa-bo5). Empty
+	// for YAML-frontmatter sources; the feed item then omits the
+	// element rather than emitting an empty one.
+	Summary string `json:"summary,omitempty"`
 }
 
 // CleanedDocument is the output of the extraction stage — what gets
@@ -69,6 +75,18 @@ type ManifestEntry struct {
 	R2ETag          string     `json:"r2_etag,omitempty"`
 	GeneratedAt     time.Time  `json:"generated_at"`
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
+
+	// SourceURL is the original publication URL (e.g. paulgraham.com)
+	// surfaced in the feed as the per-item `<link>` per the
+	// castfeedvalidator finding (wa-bo5). Optional — empty means the
+	// item omits `<link>` rather than emitting an empty element.
+	SourceURL string `json:"source_url,omitempty"`
+
+	// Description is a short plain-text summary of the essay (≤500
+	// chars, sentence-boundary trimmed) emitted as the per-item
+	// `<description>` (wa-bo5). Optional — empty means the item
+	// omits `<description>`.
+	Description string `json:"description,omitempty"`
 }
 
 // Manifest is the R2-hosted index of every published episode (§2).
@@ -131,6 +149,19 @@ type FeedConfig struct {
 	FeedPath      string `toml:"feed_path"                 json:"feed_path"`
 	CoverImageURL string `toml:"cover_image_url,omitempty" json:"cover_image_url,omitempty"`
 	Language      string `toml:"language"                  json:"language"`
+
+	// Categories is the iTunes category triple (parent + optional
+	// subcategory per row). Apple wants ≥3 with at least one
+	// subcategory; default lives at model.DefaultFeedCategories
+	// (wa-bo5). TOML form: `categories = [["Technology"],
+	// ["Education", "Self-Improvement"], ["Business",
+	// "Entrepreneurship"]]`.
+	Categories [][]string `toml:"categories,omitempty"      json:"categories,omitempty"`
+
+	// Copyright is the channel-level `<copyright>` element. Empty →
+	// omit (PG owns the essay copyright; we don't claim it). Operator
+	// opts in by setting e.g. "Audio rendering © Jacob Byrne 2026".
+	Copyright string `toml:"copyright,omitempty"       json:"copyright,omitempty"`
 }
 
 // Required env vars loaded from ~/.wiki-audio/.env (or, with the
@@ -166,4 +197,28 @@ const MinBodyChars = 200
 // Bumping this is a deliberate, breaking act — older binaries that
 // load a manifest with Version > the constant they know refuse to
 // overwrite it (§6 "Tool version mismatch").
-const ManifestSchemaVersion = 1
+//
+// Version history:
+//   - 1: initial shape (wa-76r.1).
+//   - 2: ManifestEntry gains SourceURL + Description for the
+//        castfeedvalidator-driven feed enrichments (wa-bo5).
+//        Adding optional string fields with `omitempty` is on-disk
+//        backward-compatible (old binaries reading a v2 manifest
+//        get empty strings; new binaries reading a v1 manifest
+//        write back v2 with empty fields). The bump fires the §6
+//        mismatch guard on the OLDER side at write-time, exactly
+//        as wa-76r.1's bumping policy intends.
+const ManifestSchemaVersion = 2
+
+// DefaultFeedCategories is the v1 fallback for FeedConfig.Categories
+// when the operator's config.toml omits the `categories` key. Apple's
+// taxonomy requires ≥3 categories with at least one subcategory
+// (castfeedvalidator finding, wa-bo5). The default triple covers the
+// PG-essay-as-podcast genre adequately; operators can override.
+//
+// Outer slice = categories. Inner slice = [parent] or [parent, sub].
+var DefaultFeedCategories = [][]string{
+	{"Technology"},
+	{"Education", "Self-Improvement"},
+	{"Business", "Entrepreneurship"},
+}

@@ -95,6 +95,8 @@ func extractOnlyDoc(path string, cfg *model.Config) (model.CleanedDocument, erro
 		Title:      parsed.Title,
 		Author:     model.DefaultAuthor,
 		SourcePath: path,
+		SourceURL:  parsed.Meta.SourceURL,
+		Summary:    parsed.Meta.Summary,
 	}, skipped, extract.FinalOpts{
 		VoiceID:               cfg.TTS.VoiceID,
 		ModelID:               cfg.TTS.ModelID,

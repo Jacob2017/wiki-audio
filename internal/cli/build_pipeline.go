@@ -257,9 +257,42 @@ func buildOneEssayFull(
 		FileSizeBytes:   info.Size(),
 		DurationSeconds: probeDurationSeconds(ctx, outPath, logger),
 		GeneratedAt:     now,
+		SourceURL:       doc.Meta.SourceURL,           // wa-bo5 per-item <link>
+		Description:     clampDescription(doc.Meta.Summary), // wa-bo5 per-item <description>
 		// R2Key/R2ETag/PublishedAt set in the publish phase.
 	}
 	return entry, nil
+}
+
+// clampDescription returns the per-item description trimmed to a
+// sentence boundary at ≤500 bytes (wa-bo5). Apple/iTunes describes
+// the field as a "free-text" summary and many directories truncate
+// at 4000 chars; we cap at 500 to keep the listing UI tidy and stable
+// across clients. Empty input → empty output (the feed then omits
+// the element entirely).
+func clampDescription(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	const maxLen = 500
+	if len(s) <= maxLen {
+		return s
+	}
+	// Trim to maxLen, then back up to the last sentence boundary
+	// (period, ?, or !) so we don't leave a half-word ellipsis.
+	cut := s[:maxLen]
+	if i := strings.LastIndexAny(cut, ".!?"); i > 0 {
+		return strings.TrimSpace(cut[:i+1])
+	}
+	// No boundary in window. Back up to the last word, leaving room
+	// for the 3-byte ellipsis so the final output stays ≤ maxLen.
+	const ellipsis = "…"
+	wordCut := s[:maxLen-len(ellipsis)]
+	if i := strings.LastIndex(wordCut, " "); i > 0 {
+		return strings.TrimSpace(wordCut[:i]) + ellipsis
+	}
+	return wordCut + ellipsis
 }
 
 // probeDurationSeconds shells out to ffprobe to read the duration
@@ -480,7 +513,11 @@ func readLocalManifest(path string) (*model.Manifest, error) {
 		return nil, fmt.Errorf("manifest version %d > known %d — upgrade wiki-audio (§6 schema-mismatch guard)",
 			m.Version, model.ManifestSchemaVersion)
 	}
-	if m.Version == 0 {
+	// Auto-upgrade older manifests to the current schema version
+	// (wa-76r.1 bumping policy: backward-compatible additions only).
+	// The version-history comment in model/types.go spells out which
+	// shapes are migrated through this path.
+	if m.Version < model.ManifestSchemaVersion {
 		m.Version = model.ManifestSchemaVersion
 	}
 	if m.Entries == nil {

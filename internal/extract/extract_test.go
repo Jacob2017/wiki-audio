@@ -301,6 +301,77 @@ func TestParse_TitleLineDroppedFromBody(t *testing.T) {
 	}
 }
 
+// --- ReadwiseMeta (wa-bo5) -----------------------------------------------
+
+// wa-bo5: Readwise metadata parser for the per-item <link> +
+// <description> feed elements. Paired with the canonical fixture so a
+// future refactor that touches the metadata-block parser surfaces here.
+func TestParseReadwiseMeta_CanonicalEssay(t *testing.T) {
+	got := ParseReadwiseMeta(canonicalEssay)
+	if got.SourceURL != "http://paulgraham.com/greatwork.html" {
+		t.Errorf("SourceURL: got %q want %q", got.SourceURL, "http://paulgraham.com/greatwork.html")
+	}
+	if got.Summary != "A guide." {
+		t.Errorf("Summary: got %q want %q", got.Summary, "A guide.")
+	}
+}
+
+func TestParseReadwiseMeta_YAMLFrontmatterReturnsZero(t *testing.T) {
+	got := ParseReadwiseMeta("---\ntitle: T\nurl: x\nsummary: s\n---\nbody\n")
+	if got != (ReadwiseMeta{}) {
+		t.Errorf("expected zero ReadwiseMeta for YAML-frontmatter source; got %+v", got)
+	}
+}
+
+func TestParseReadwiseMeta_MissingFieldsAreEmpty(t *testing.T) {
+	src := "## Metadata\n- Author: [[Foo]]\n- Category: #articles\n\n## Full Document\nbody\n"
+	got := ParseReadwiseMeta(src)
+	if got.SourceURL != "" {
+		t.Errorf("SourceURL should be empty when no URL bullet present; got %q", got.SourceURL)
+	}
+	if got.Summary != "" {
+		t.Errorf("Summary should be empty when no Summary bullet present; got %q", got.Summary)
+	}
+}
+
+func TestParseReadwiseMeta_StarBulletAndExtraSpaces(t *testing.T) {
+	src := "## Metadata\n*  URL:   http://x.example/y \n*  Summary:   The summary text.  \n\n## Full Document\nbody\n"
+	got := ParseReadwiseMeta(src)
+	if got.SourceURL != "http://x.example/y" {
+		t.Errorf("SourceURL: got %q", got.SourceURL)
+	}
+	if got.Summary != "The summary text." {
+		t.Errorf("Summary: got %q", got.Summary)
+	}
+}
+
+// Multi-bullet Summary with embedded colons must be captured verbatim
+// (the regex captures everything after the first ": " until end of
+// line, so this is the natural behavior — pin it).
+func TestParseReadwiseMeta_SummaryWithColons(t *testing.T) {
+	src := "## Metadata\n- Summary: Part 1: the thesis. Part 2: the elaboration.\n- URL: http://x.example/y\n\n## Full Document\nbody\n"
+	got := ParseReadwiseMeta(src)
+	if got.Summary != "Part 1: the thesis. Part 2: the elaboration." {
+		t.Errorf("Summary: got %q", got.Summary)
+	}
+}
+
+// Parse() must fold ReadwiseMeta into Parsed.Meta so callers don't
+// need to invoke ParseReadwiseMeta separately. Pin the wiring so a
+// future refactor that splits Parse can't drop it silently.
+func TestParse_PopulatesReadwiseMeta(t *testing.T) {
+	parsed, err := Parse(canonicalEssay, "great-work.md")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if parsed.Meta.SourceURL != "http://paulgraham.com/greatwork.html" {
+		t.Errorf("Parsed.Meta.SourceURL: got %q", parsed.Meta.SourceURL)
+	}
+	if parsed.Meta.Summary != "A guide." {
+		t.Errorf("Parsed.Meta.Summary: got %q", parsed.Meta.Summary)
+	}
+}
+
 // --- SplitNotes (§5.1 step 5, wa-kyn.5) ----------------------------------
 
 func TestSplitNotes_NoNotesSection(t *testing.T) {

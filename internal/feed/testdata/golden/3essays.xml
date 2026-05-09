@@ -6,13 +6,22 @@
     <atom:link rel="self" type="application/rss+xml" href="https://feed.example.test/pg.xml?t=GOLDEN"></atom:link>
     <description>Paul Graham essays read aloud.</description>
     <language>en-us</language>
+    <copyright>Audio rendering © Operator 2026</copyright>
     <itunes:author>Paul Graham</itunes:author>
     <itunes:owner>
       <itunes:name>Paul Graham</itunes:name>
       <itunes:email>owner@example.test</itunes:email>
     </itunes:owner>
     <itunes:explicit>false</itunes:explicit>
+    <itunes:type>episodic</itunes:type>
     <itunes:category text="Technology"></itunes:category>
+    <itunes:category text="Education">
+      <itunes:category text="Self-Improvement"></itunes:category>
+    </itunes:category>
+    <itunes:category text="Business">
+      <itunes:category text="Entrepreneurship"></itunes:category>
+    </itunes:category>
+    <itunes:image href="https://feed.example.test/pg/cover.jpg"></itunes:image>
     <item>
       <title>High Agency</title>
       <enclosure url="https://feed.example.test/pg/high-agency-in-30-minutes.mp3" length="18000000" type="audio/mpeg"></enclosure>
@@ -21,24 +30,32 @@
       <itunes:author>Paul Graham</itunes:author>
       <itunes:duration>1500</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
+      <itunes:image href="https://feed.example.test/pg/cover.jpg"></itunes:image>
+      <description>A short field guide to recognizing and developing high agency.</description>
     </item>
     <item>
       <title>How to Get Startup Ideas</title>
+      <link>http://paulgraham.com/startupideas.html</link>
       <enclosure url="https://feed.example.test/pg/how-to-get-startup-ideas.mp3" length="24000000" type="audio/mpeg"></enclosure>
       <guid isPermaLink="false">pg-how-to-get-startup-ideas</guid>
       <pubDate>Sat, 09 May 2026 10:00:00 +0000</pubDate>
       <itunes:author>Paul Graham</itunes:author>
       <itunes:duration>1800</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
+      <itunes:image href="https://feed.example.test/pg/cover.jpg"></itunes:image>
+      <description>The way to get startup ideas is not to try to think of startup ideas. Notice problems. Originally published November 2012.</description>
     </item>
     <item>
       <title>How to Do Great Work</title>
+      <link>http://paulgraham.com/greatwork.html</link>
       <enclosure url="https://feed.example.test/pg/how-to-do-great-work.mp3" length="58629016" type="audio/mpeg"></enclosure>
       <guid isPermaLink="false">pg-how-to-do-great-work</guid>
       <pubDate>Fri, 08 May 2026 14:21:03 +0000</pubDate>
       <itunes:author>Paul Graham</itunes:author>
       <itunes:duration>3664</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
+      <itunes:image href="https://feed.example.test/pg/cover.jpg"></itunes:image>
+      <description>What it takes to do great work in any field, distilled into a long letter to a young person figuring out what to aim at. Originally published July 2023.</description>
     </item>
   </channel>
 </rss>

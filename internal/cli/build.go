@@ -172,6 +172,8 @@ func buildOneEssay(path string, cfg *model.Config) essayResult {
 		Title:      parsed.Title,
 		Author:     model.DefaultAuthor,
 		SourcePath: path,
+		SourceURL:  parsed.Meta.SourceURL,
+		Summary:    parsed.Meta.Summary,
 	}, skipped, extract.FinalOpts{
 		VoiceID:               cfg.TTS.VoiceID,
 		ModelID:               cfg.TTS.ModelID,

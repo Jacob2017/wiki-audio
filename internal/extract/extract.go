@@ -30,6 +30,12 @@ import (
 type Parsed struct {
 	Title   string
 	RawBody string
+
+	// Meta carries Readwise-only metadata fields the feed generator
+	// surfaces (per-item link + description, wa-bo5). Empty for YAML-
+	// frontmatter files; the feed item then omits the corresponding
+	// element rather than emitting an empty one.
+	Meta ReadwiseMeta
 }
 
 var (
@@ -74,7 +80,11 @@ func Parse(content, name string) (Parsed, error) {
 	if title == "" {
 		title = titleCaseFromFilename(name)
 	}
-	return Parsed{Title: title, RawBody: body}, nil
+	return Parsed{
+		Title:   title,
+		RawBody: body,
+		Meta:    ParseReadwiseMeta(content),
+	}, nil
 }
 
 // stripHeaders dispatches between Readwise and YAML-frontmatter
@@ -208,6 +218,51 @@ func readYAMLTitle(content string) string {
 		return ""
 	}
 	return strings.TrimSpace(m[1])
+}
+
+// ReadwiseMeta is the subset of Readwise metadata fields the feed
+// generator cares about (wa-bo5). Both fields are best-effort: a
+// missing or malformed line yields the zero value rather than an
+// error. The full body parse is always done elsewhere — this is a
+// supplementary metadata reader.
+type ReadwiseMeta struct {
+	SourceURL string // "URL: ..." line
+	Summary   string // "Summary: ..." line
+}
+
+// readwiseFieldRe matches a Readwise metadata bullet line and captures
+// the field name + value. Tolerant of optional leading whitespace and
+// of either `- ` or `* ` bullet markers.
+var readwiseFieldRe = regexp.MustCompile(`(?m)^[ \t]*[-*][ \t]+([A-Za-z][A-Za-z ]*?):[ \t]*(.+?)[ \t]*$`)
+
+// ParseReadwiseMeta extracts URL and Summary fields from the
+// "## Metadata" block of a Readwise canonical export. Returns the
+// zero ReadwiseMeta if the file is YAML-frontmatter-only or has no
+// "## Metadata" block — callers treat absence as "no per-essay
+// metadata to surface in the feed".
+func ParseReadwiseMeta(content string) ReadwiseMeta {
+	if !hasReadwiseHeaders(content) {
+		return ReadwiseMeta{}
+	}
+	mIdx := strings.Index(content, metadataHeader)
+	fdIdx := strings.Index(content[mIdx:], fullDocumentMark)
+	if mIdx < 0 || fdIdx < 0 {
+		return ReadwiseMeta{}
+	}
+	block := content[mIdx : mIdx+fdIdx]
+
+	var meta ReadwiseMeta
+	for _, m := range readwiseFieldRe.FindAllStringSubmatch(block, -1) {
+		key := strings.ToLower(strings.TrimSpace(m[1]))
+		val := strings.TrimSpace(m[2])
+		switch key {
+		case "url":
+			meta.SourceURL = val
+		case "summary":
+			meta.Summary = val
+		}
+	}
+	return meta
 }
 
 // SplitNotes scans rawBody line-by-line for the FIRST line that —

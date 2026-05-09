@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -386,6 +387,84 @@ func TestPublish_TokenRequiredPreUpload(t *testing.T) {
 	}
 	if !strings.Contains(errPublishNoToken.Error(), "doctor") {
 		t.Errorf("error should hint wiki-audio doctor; got: %v", errPublishNoToken)
+	}
+}
+
+// --- overlayLocalFeedFields (wa-bo5) ---
+
+// Surgical fix in publish.go: the live feed regenerates from R2's
+// manifest, which can predate the wa-bo5 schema. The overlay folds
+// per-essay SourceURL + Description from the local manifest into
+// the in-memory mft just before buildFeed. Pin the contract so a
+// future "we restructured publish" PR doesn't drop the overlay
+// silently and quietly ship a feed without per-item link/description.
+func TestOverlayLocalFeedFields_OverlaysOnlyEmptyFields(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	t.Setenv("HOME", cacheDir) // cache.Dir() may resolve under $HOME
+
+	if err := os.MkdirAll(cache.Dir(), 0o755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	local := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", SourceURL: "http://example.test/a", Description: "Alpha summary."},
+			"beta":  {Slug: "beta", SourceURL: "http://example.test/b", Description: "Beta summary."},
+		},
+	}
+	body, _ := json.Marshal(local)
+	if err := os.WriteFile(filepath.Join(cache.Dir(), "manifest.json"), body, 0o644); err != nil {
+		t.Fatalf("write local manifest: %v", err)
+	}
+
+	mft := &model.Manifest{
+		Entries: map[string]model.ManifestEntry{
+			// alpha: R2 has no overlay fields → both populated from local.
+			"alpha": {Slug: "alpha"},
+			// beta: R2 already has its own description → that wins; only
+			// SourceURL gets overlaid.
+			"beta": {Slug: "beta", Description: "Pre-existing R2 desc."},
+			// gamma: not in local manifest → unchanged.
+			"gamma": {Slug: "gamma"},
+		},
+	}
+
+	overlayLocalFeedFields(mft, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if got := mft.Entries["alpha"].SourceURL; got != "http://example.test/a" {
+		t.Errorf("alpha SourceURL: got %q", got)
+	}
+	if got := mft.Entries["alpha"].Description; got != "Alpha summary." {
+		t.Errorf("alpha Description: got %q", got)
+	}
+	if got := mft.Entries["beta"].SourceURL; got != "http://example.test/b" {
+		t.Errorf("beta SourceURL: got %q", got)
+	}
+	if got := mft.Entries["beta"].Description; got != "Pre-existing R2 desc." {
+		t.Errorf("beta Description should be preserved when R2 already has one; got %q", got)
+	}
+	if got := mft.Entries["gamma"].SourceURL; got != "" {
+		t.Errorf("gamma should have no SourceURL (not in local manifest); got %q", got)
+	}
+}
+
+// Missing local manifest is best-effort: overlay logs and returns
+// without modifying mft. Pin so a future "reject if local missing"
+// refactor surfaces.
+func TestOverlayLocalFeedFields_MissingLocalManifestIsBestEffort(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	t.Setenv("HOME", cacheDir)
+
+	mft := &model.Manifest{
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha"},
+		},
+	}
+	overlayLocalFeedFields(mft, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if mft.Entries["alpha"].SourceURL != "" {
+		t.Errorf("expected no overlay when local manifest missing; got %q", mft.Entries["alpha"].SourceURL)
 	}
 }
 

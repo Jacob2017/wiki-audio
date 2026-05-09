@@ -465,6 +465,231 @@ func TestCastfeedvalidator_StructuralParity(t *testing.T) {
 }
 
 // =====================================================================
+// wa-bo5 rows (castfeedvalidator-driven feed enrichments). Each row
+// pins one of the six changes shipped in the wa-bo5 commit.
+// =====================================================================
+
+// Row: channel itunes:image (wa-bo5 #1)
+func TestRow_channel_itunes_image_emitted_when_set(t *testing.T) {
+	ch := fixtureChannel()
+	ch.CoverImage = "https://feed.example.test/pg/cover.jpg"
+	out, err := Generate(ch, nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	want := `<itunes:image href="https://feed.example.test/pg/cover.jpg">`
+	if !strings.Contains(string(out), want) {
+		t.Errorf("channel itunes:image missing or malformed; want %q in:\n%s", want, out)
+	}
+}
+
+func TestRow_per_item_itunes_image_repeated(t *testing.T) {
+	ch := fixtureChannel()
+	ch.CoverImage = "https://feed.example.test/pg/cover.jpg"
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	entries := []model.ManifestEntry{
+		entry("a", "A", 60, 1000, pub),
+		entry("b", "B", 60, 1000, pub.Add(time.Second)),
+	}
+	out, err := Generate(ch, entries, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// 1 channel + N items = 3 occurrences for 2 entries.
+	got := strings.Count(string(out), `<itunes:image href="https://feed.example.test/pg/cover.jpg">`)
+	want := 1 + len(entries)
+	if got != want {
+		t.Errorf("itunes:image count: got %d, want %d (1 channel + %d items)\n%s", got, want, len(entries), out)
+	}
+}
+
+// Row: channel itunes:type=episodic (wa-bo5 #2)
+func TestRow_channel_itunes_type_episodic(t *testing.T) {
+	ch := fixtureChannel()
+	ch.PodcastType = PodcastTypeEpisodic
+	out, err := Generate(ch, nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !strings.Contains(string(out), "<itunes:type>episodic</itunes:type>") {
+		t.Errorf("itunes:type=episodic missing:\n%s", out)
+	}
+}
+
+// Default callers (PodcastType empty) should NOT emit the element —
+// keeps wa-i1l.5 callers backward-compatible until they opt in.
+func TestRow_channel_itunes_type_omitted_when_empty(t *testing.T) {
+	out, err := Generate(fixtureChannel(), nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(string(out), "<itunes:type>") {
+		t.Errorf("itunes:type should be omitted when Channel.PodcastType is empty; got:\n%s", out)
+	}
+}
+
+// Row: channel ≥3 categories with subcategories (wa-bo5 #3)
+func TestRow_channel_categories_triple_with_subs(t *testing.T) {
+	ch := fixtureChannel()
+	ch.Categories = [][]string{
+		{"Technology"},
+		{"Education", "Self-Improvement"},
+		{"Business", "Entrepreneurship"},
+	}
+	out, err := Generate(ch, nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	s := string(out)
+
+	// Three top-level itunes:category text="..." attrs.
+	for _, cat := range []string{"Technology", "Education", "Business"} {
+		if !strings.Contains(s, `<itunes:category text="`+cat+`"`) {
+			t.Errorf("missing top-level category text=%q\n%s", cat, s)
+		}
+	}
+	// Two nested subcategories (Self-Improvement, Entrepreneurship)
+	// must appear as nested itunes:category elements — pinning the
+	// nested shape distinguishes "valid Apple subcategory" from
+	// "two flat sibling categories".
+	for _, sub := range []string{"Self-Improvement", "Entrepreneurship"} {
+		nested := `<itunes:category text="` + sub + `">`
+		if !strings.Contains(s, nested) {
+			t.Errorf("missing nested subcategory text=%q\n%s", sub, s)
+		}
+	}
+	// Order: parent appears before its sub. We don't pin top-level
+	// order across the three triples (callers may reorder); but
+	// nested-after-parent is a structural invariant.
+	parentEdu := strings.Index(s, `<itunes:category text="Education">`)
+	subImprov := strings.Index(s, `<itunes:category text="Self-Improvement">`)
+	if parentEdu < 0 || subImprov < 0 || parentEdu > subImprov {
+		t.Errorf("Education parent must precede its Self-Improvement subcategory; positions parent=%d sub=%d", parentEdu, subImprov)
+	}
+}
+
+// Default fallback: zero-config channel emits the
+// model.DefaultFeedCategories triple. Catches a future PR that
+// silently empties the default and ships a single-category feed.
+func TestRow_channel_default_categories_when_unset(t *testing.T) {
+	out, err := Generate(fixtureChannel(), nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	s := string(out)
+	got := strings.Count(s, "<itunes:category ")
+	// 3 parents + 2 subcategories = 5 total occurrences (the parents
+	// open as `<itunes:category text="..."` and the subs open the
+	// same way nested inside).
+	if got < 5 {
+		t.Errorf("default categories should emit ≥5 itunes:category elements (3 parents + ≥2 subs); got %d\n%s", got, s)
+	}
+}
+
+// Legacy single-category callers still work — wa-i1l.5's
+// Channel.Category field maps to a single category entry. Pin so a
+// future "remove the legacy field" PR re-surfaces the migration cost.
+func TestRow_channel_legacy_single_category_still_works(t *testing.T) {
+	ch := fixtureChannel()
+	ch.Category = "Society & Culture"
+	out, err := Generate(ch, nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `<itunes:category text="Society &amp; Culture">`) {
+		t.Errorf("legacy single category should be emitted (and `&` escaped):\n%s", s)
+	}
+	// Default triple should NOT also be emitted — the legacy field
+	// stands in for the whole list.
+	if strings.Contains(s, `<itunes:category text="Education">`) {
+		t.Errorf("legacy single category set; default Education should NOT appear:\n%s", s)
+	}
+}
+
+// Row: channel <copyright> (wa-bo5 #4)
+func TestRow_channel_copyright_emitted_when_set(t *testing.T) {
+	ch := fixtureChannel()
+	ch.Copyright = "Audio rendering © 2026 Operator"
+	out, err := Generate(ch, nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	want := `<copyright>Audio rendering © 2026 Operator</copyright>`
+	if !strings.Contains(string(out), want) {
+		t.Errorf("copyright element missing or malformed; want %q in:\n%s", want, out)
+	}
+}
+
+func TestRow_channel_copyright_omitted_when_empty(t *testing.T) {
+	out, err := Generate(fixtureChannel(), nil, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(string(out), "<copyright>") {
+		t.Errorf("copyright must be omitted when empty (PG owns the essay copyright; we don't claim it):\n%s", out)
+	}
+}
+
+// Row: per-item <link> (wa-bo5 #5)
+func TestRow_item_link_emitted_when_source_url_set(t *testing.T) {
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	e := entry("essay", "Essay", 60, 1000, pub)
+	e.SourceURL = "http://paulgraham.com/greatwork.html"
+	out, err := Generate(fixtureChannel(), []model.ManifestEntry{e}, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !strings.Contains(string(out), "<link>http://paulgraham.com/greatwork.html</link>") {
+		t.Errorf("item link missing:\n%s", out)
+	}
+}
+
+func TestRow_item_link_omitted_when_source_url_empty(t *testing.T) {
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	e := entry("essay", "Essay", 60, 1000, pub) // SourceURL left empty
+	out, err := Generate(fixtureChannel(), []model.ManifestEntry{e}, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// Only the channel <link> should appear, not an item-level one.
+	// Channel <link> reads <link>https://feed.example.test</link>;
+	// an item without SourceURL must not introduce an empty <link>.
+	if strings.Count(string(out), "<link>") > 1 {
+		t.Errorf("expected exactly one <link> (channel only) when SourceURL is empty; got:\n%s", out)
+	}
+}
+
+// Row: per-item <description> (wa-bo5 #6)
+func TestRow_item_description_emitted_when_set(t *testing.T) {
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	e := entry("essay", "Essay", 60, 1000, pub)
+	e.Description = "First paragraph of the essay, briefly summarizing the thesis."
+	out, err := Generate(fixtureChannel(), []model.ManifestEntry{e}, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	want := "<description>First paragraph of the essay, briefly summarizing the thesis.</description>"
+	if !strings.Contains(string(out), want) {
+		t.Errorf("item description missing or malformed; want %q in:\n%s", want, out)
+	}
+}
+
+func TestRow_item_description_omitted_when_empty(t *testing.T) {
+	pub := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+	e := entry("essay", "Essay", 60, 1000, pub) // Description left empty
+	out, err := Generate(fixtureChannel(), []model.ManifestEntry{e}, passthroughURL("https://feed.example.test"))
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// Channel <description> exists; item should NOT add an empty one.
+	descCount := strings.Count(string(out), "<description>")
+	if descCount != 1 {
+		t.Errorf("expected exactly one <description> (channel only) when item Description is empty; got %d:\n%s", descCount, out)
+	}
+}
+
+// =====================================================================
 // Coverage map (informational — run as a sanity log on -v) — checks
 // that every test name we *intend* to cover from the bead's table is
 // actually represented by a test function in this package. Helps a
