@@ -2,6 +2,8 @@
 
 This Worker fronts the private R2 bucket `wiki-audio` and gates all reads behind a static query-string token. It is the only network path to read audio enclosures and the RSS feed; the bucket itself has zero public access. See §9 of `PLAN_FOR_AUDIO_LIBRARY.md` for the threat model.
 
+> **Where files live (cross-reference).** The Worker only sees R2 keys (`pg/<slug>.mp3`, `pg.xml`, `pg.manifest.json`, `pg.manifest.json.bak`). The CLI side maintains two local directories — `~/.wiki-audio/` for config + secrets and `~/.cache/wiki-audio/` for regeneratable build output (`tmp/`, `out/`, `skipped.txt`). See the top-level [`README.md`](../README.md#where-things-live) for the complete map. Cache contents never reach the Worker; the publish step uploads `~/.cache/wiki-audio/out/<slug>.mp3` directly to R2.
+
 ## Architecture
 
 R2 binding `BUCKET` → `wiki-audio` bucket. Static token compared in constant time to the runtime secret `ACCESS_TOKEN`. Token check happens BEFORE key parsing, so authentication-failure responses cannot leak any information about which keys exist. No public Workers.dev surface beyond the account-default subdomain; no public R2 dev URL; no wide-open routes. See §9.
