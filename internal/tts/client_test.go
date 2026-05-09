@@ -149,6 +149,127 @@ func TestClientSynthesizeContextCancellationPropagates(t *testing.T) {
 	}
 }
 
+// --- wa-3gf: Retry-After header threading ---
+
+// 429 with Retry-After in seconds form must populate
+// APIError.RetryAfter. The build pipeline honors this hint over its
+// computed exponential backoff, so dropping the header (the original
+// wa-3gf bug) leads to too-eager retries that re-trip the 429.
+func TestClientSynthesizePopulatesRetryAfterFromSeconds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "10")
+		http.Error(w, `{"detail":"slow down"}`, http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setAPIBaseURLForTest(srv.URL))
+
+	client := NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+
+	_, err := client.Synthesize(context.Background(), "hello")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T (%v)", err, err)
+	}
+	if apiErr.RetryAfter != 10*time.Second {
+		t.Errorf("RetryAfter = %s, want 10s", apiErr.RetryAfter)
+	}
+	if !apiErr.Retryable {
+		t.Errorf("429 should remain retryable")
+	}
+}
+
+// HTTP-date form is also valid per RFC 7231 §7.1.3. parseRetryAfter
+// computes the delta from now; verify the rounded result is in the
+// expected ballpark (parsing has 1s resolution).
+func TestClientSynthesizePopulatesRetryAfterFromHTTPDate(t *testing.T) {
+	const wantApprox = 30 * time.Second
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		future := time.Now().UTC().Add(wantApprox)
+		w.Header().Set("Retry-After", future.Format(http.TimeFormat))
+		http.Error(w, `{"detail":"come back later"}`, http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setAPIBaseURLForTest(srv.URL))
+
+	client := NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+
+	_, err := client.Synthesize(context.Background(), "hello")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T (%v)", err, err)
+	}
+	// Allow ±2s round-trip slop (HTTP-date has 1s resolution +
+	// network latency between request build and server receipt).
+	low, high := wantApprox-2*time.Second, wantApprox+1*time.Second
+	if apiErr.RetryAfter < low || apiErr.RetryAfter > high {
+		t.Errorf("RetryAfter = %s, want approx %s (±2s)", apiErr.RetryAfter, wantApprox)
+	}
+}
+
+// No Retry-After header → RetryAfter zero. Build pipeline falls
+// back to its computed exponential backoff in this case.
+func TestClientSynthesizeRetryAfterAbsentIsZero(t *testing.T) {
+	client := newClientAgainstStatus(t, http.StatusTooManyRequests, `{"detail":"slow"}`)
+
+	_, err := client.Synthesize(context.Background(), "hello")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T (%v)", err, err)
+	}
+	if apiErr.RetryAfter != 0 {
+		t.Errorf("RetryAfter = %s, want 0 (no header)", apiErr.RetryAfter)
+	}
+}
+
+// Malformed Retry-After (not a number, not an HTTP-date) → zero.
+// The client treats it as "no hint" rather than failing the
+// request — the body has already been read; refusing here would
+// lose the underlying status info.
+func TestClientSynthesizeRetryAfterMalformedIsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "soon-ish")
+		http.Error(w, `{"detail":"slow"}`, http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setAPIBaseURLForTest(srv.URL))
+
+	client := NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+
+	_, err := client.Synthesize(context.Background(), "hello")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T (%v)", err, err)
+	}
+	if apiErr.RetryAfter != 0 {
+		t.Errorf("RetryAfter = %s, want 0 (malformed header)", apiErr.RetryAfter)
+	}
+}
+
+// Retry-After is also valid on 5xx responses per RFC 7231. Verify
+// the parser fires for any retryable status, not just 429.
+func TestClientSynthesizeRetryAfterAlsoOn503(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, `{"detail":"upstream busy"}`, http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setAPIBaseURLForTest(srv.URL))
+
+	client := NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+
+	_, err := client.Synthesize(context.Background(), "hello")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T (%v)", err, err)
+	}
+	if apiErr.RetryAfter != 5*time.Second {
+		t.Errorf("RetryAfter = %s, want 5s on 503", apiErr.RetryAfter)
+	}
+	if !apiErr.Retryable {
+		t.Errorf("503 should be retryable")
+	}
+}
+
 func newClientAgainstStatus(t *testing.T, status int, body string) *Client {
 	t.Helper()
 

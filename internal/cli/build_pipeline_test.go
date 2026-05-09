@@ -1,15 +1,24 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Jacob2017/wiki-audio/internal/model"
+	"github.com/Jacob2017/wiki-audio/internal/tts"
 )
 
 // Unit tests for the wa-4cw.5 pipeline seams. Full pipeline
@@ -246,6 +255,184 @@ func TestFormatBytes(t *testing.T) {
 			t.Errorf("formatBytes(%d) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
+
+// --- wa-3gf: Retry-After threading ---
+
+// computeRetryDelay returns (hint, "retry-after") when the server
+// gave us a usable hint within the cap.
+func TestComputeRetryDelay_HonorsHintBelowCap(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	delay, source := computeRetryDelay(15*time.Second, 1, 2.0, rng)
+	if delay != 15*time.Second {
+		t.Errorf("delay = %s, want 15s (server hint)", delay)
+	}
+	if source != "retry-after" {
+		t.Errorf("source = %q, want retry-after", source)
+	}
+}
+
+// Hint above the cap collapses to the cap and is still labeled
+// "retry-after" — the caller logs the clamp separately so the
+// operator sees the gap, but downstream still treats it as a
+// server-honored sleep.
+func TestComputeRetryDelay_ClampsHintAtCap(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	delay, source := computeRetryDelay(5*time.Minute, 1, 2.0, rng)
+	if delay != retryAfterCap {
+		t.Errorf("delay = %s, want %s (cap)", delay, retryAfterCap)
+	}
+	if source != "retry-after" {
+		t.Errorf("source = %q, want retry-after", source)
+	}
+}
+
+// hint == 0 → fall back to exponential backoff, source "backoff".
+// Backoff is bounded at 60s for arbitrarily-late attempts.
+func TestComputeRetryDelay_FallsBackToBackoffWhenNoHint(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+
+	delay, source := computeRetryDelay(0, 1, 2.0, rng)
+	if source != "backoff" {
+		t.Errorf("source = %q, want backoff", source)
+	}
+	// attempt=1, base=2 → 2 * 2^0 + jitter = 2.x seconds
+	if delay < 2*time.Second || delay > 3500*time.Millisecond {
+		t.Errorf("attempt=1 base=2 backoff = %s, want roughly 2-3.5s", delay)
+	}
+}
+
+// Negative hint is treated as "no hint" — defensive against a
+// future bug where parseRetryAfter accidentally returns a negative
+// value.
+func TestComputeRetryDelay_NegativeHintFallsBackToBackoff(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	_, source := computeRetryDelay(-5*time.Second, 1, 2.0, rng)
+	if source != "backoff" {
+		t.Errorf("negative hint should fall back to backoff; source = %q", source)
+	}
+}
+
+// Backoff cap: arbitrarily-late attempts are bounded at 60s. Without
+// the cap, attempt=10 would produce 2^9 = 512s delays.
+func TestComputeRetryDelay_BackoffBoundedAt60s(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for attempt := 1; attempt <= 20; attempt++ {
+		delay, _ := computeRetryDelay(0, attempt, 2.0, rng)
+		if delay > 60*time.Second {
+			t.Errorf("attempt=%d backoff = %s exceeds 60s cap", attempt, delay)
+		}
+	}
+}
+
+// nil rng must not panic — defensive default.
+func TestComputeRetryDelay_NilRngDefaults(t *testing.T) {
+	delay, _ := computeRetryDelay(0, 1, 2.0, nil)
+	if delay <= 0 {
+		t.Errorf("nil rng should produce a positive delay; got %s", delay)
+	}
+}
+
+// Integration test through synthesizeChunkWithRetry: server returns
+// 429 with Retry-After: 1 on first call, 200 on second. Verify the
+// retry path honored the hint (sleep ≥ ~1s) and the chunk lands at
+// outPath. Slow-ish (~1s wall time) but exercises the full loop.
+func TestSynthesizeChunkWithRetry_HonorsServerHint(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, `{"detail":"slow"}`, http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = io.WriteString(w, "mp3-bytes-after-retry")
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setTTSAPIBaseURLForTest(srv.URL))
+
+	client := tts.NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "chunk.mp3")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	start := time.Now()
+	err := synthesizeChunkWithRetry(context.Background(), client, "hello", outPath,
+		model.TTSConfig{VoiceID: "voice-123", RetryAttempts: 3, RetryBackoffBase: 2}, logger)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("synthesizeChunkWithRetry: %v", err)
+	}
+
+	// We slept the server's 1s hint, NOT the computed-backoff value
+	// (which would be ~2s for attempt=1, base=2). Allow ±300ms slop.
+	if elapsed < 800*time.Millisecond {
+		t.Errorf("elapsed = %s, want ≥800ms (server hint should have been honored)", elapsed)
+	}
+	if elapsed > 1700*time.Millisecond {
+		t.Errorf("elapsed = %s, want ≤1.7s (no fallback to ~2s backoff)", elapsed)
+	}
+
+	// Chunk landed at outPath.
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "mp3-bytes-after-retry" {
+		t.Errorf("chunk content = %q", got)
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Errorf("server got %d calls, want 2", got)
+	}
+}
+
+// Fatal status (e.g. 401) short-circuits — no retry, no sleep.
+func TestSynthesizeChunkWithRetry_FatalStatusShortCircuits(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, `{"detail":"invalid api key"}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setTTSAPIBaseURLForTest(srv.URL))
+
+	client := tts.NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "chunk.mp3")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := synthesizeChunkWithRetry(context.Background(), client, "hello", outPath,
+		model.TTSConfig{VoiceID: "voice-123", RetryAttempts: 5, RetryBackoffBase: 2}, logger)
+	if err == nil {
+		t.Fatal("expected fatal error")
+	}
+	if !errors.As(err, new(*tts.APIError)) {
+		// errors.As needs an instance to write into — check via wrap.
+		var apiErr *tts.APIError
+		if !errors.As(err, &apiErr) {
+			t.Errorf("expected wrapped *tts.APIError; got %T", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("server got %d calls; fatal should not retry", got)
+	}
+}
+
+// setTTSAPIBaseURLForTest swaps the package-private apiBaseURL in
+// internal/tts so test traffic hits the local httptest server.
+// Mirror of setAPIBaseURLForTest in client_test.go but exposed via
+// a tts-package test helper would require us to reach in there;
+// since we can't, use a wrapper that does the swap via reflection
+// — but reflection on package-level var requires it to be exported
+// or in same package. Cheapest path: add a tiny public test hook
+// to internal/tts.
+//
+// Implementation: see internal/tts/test_hook.go (companion file
+// added with this fix).
+func setTTSAPIBaseURLForTest(baseURL string) func() {
+	return tts.SetAPIBaseURLForTest(baseURL)
 }
 
 // --- buildOneEssayFull skip semantics (manifest hash match) ---

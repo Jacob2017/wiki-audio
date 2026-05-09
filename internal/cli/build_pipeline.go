@@ -263,16 +263,65 @@ func buildOneEssayFull(
 	return entry, nil
 }
 
-// synthesizeChunkWithRetry calls client.Synthesize with simple
-// exponential-backoff retry for retryable APIErrors. cfg.RetryAttempts
-// is the total attempt budget (including the first).
+// retryAfterCap bounds how long the build pipeline will sleep on a
+// server-supplied Retry-After hint. Values above this fall back to
+// the cap. ElevenLabs occasionally returns very long Retry-After on
+// hard quota-exceeded; capping protects bulk runs from a single
+// chunk wedging the run for minutes. The §5.3 spec just says
+// "honor Retry-After if present" without a cap; 60s is the
+// orchestrator's wa-3gf guidance for the call site.
+//
+// Variable (not const) so unit tests can shrink it; production code
+// never mutates this.
+var retryAfterCap = 60 * time.Second
+
+// computeRetryDelay derives the sleep duration before the next TTS
+// retry attempt. Returns (delay, source) where source is one of:
+//
+//	"retry-after"  — server hint honored (capped at retryAfterCap)
+//	"backoff"      — no hint (or zero/negative) → exponential backoff
+//	                 with jitter, clamped at 60s
+//
+// hint > retryAfterCap collapses to retryAfterCap; the caller logs
+// the clamp at WARN level so the operator sees the gap. attempt is
+// the 1-based retry index (0 is the initial call, never reaches
+// here).
+func computeRetryDelay(hint time.Duration, attempt int, baseSeconds float64, rng *rand.Rand) (time.Duration, string) {
+	if hint > 0 {
+		if hint > retryAfterCap {
+			return retryAfterCap, "retry-after"
+		}
+		return hint, "retry-after"
+	}
+	if rng == nil {
+		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	seconds := baseSeconds*math.Pow(2, float64(attempt-1)) + rng.Float64()
+	if seconds > 60 {
+		seconds = 60
+	}
+	return time.Duration(seconds * float64(time.Second)), "backoff"
+}
+
+// synthesizeChunkWithRetry calls client.Synthesize with retry on
+// retryable APIErrors. cfg.RetryAttempts is the total attempt
+// budget (including the first).
+//
+// Sleep policy:
+//   - APIError carries Retry-After honor it (capped at
+//     retryAfterCap to bound bulk-run wall clock). pane-9's
+//     parseRetryAfter already filters values outside [0, 300s]
+//     and rejects malformed headers, so apiErr.RetryAfter > 0
+//     means the server gave us a real, sane hint.
+//   - No hint (RetryAfter == 0, or transport-level error)
+//     fall back to exponential backoff with jitter, capped at 60s.
 //
 // pane-9's retry classifier internals (classifyHTTPResponse,
 // classifyTransportError) are package-private to internal/tts. We
-// consume the public surface — APIError.Retryable — which the client
-// already populates per the same status-code policy. When pane-9
-// exposes a public retry helper, this loop can be replaced with one
-// call (TODO).
+// consume the public surface — APIError.Retryable + RetryAfter —
+// which the client populates per the same policy. When pane-9
+// exposes a public retry helper, this loop can be replaced with
+// one call (TODO).
 func synthesizeChunkWithRetry(
 	ctx context.Context,
 	client *tts.Client,
@@ -293,21 +342,24 @@ func synthesizeChunkWithRetry(
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	var lastErr error
+	var nextSleep time.Duration // 0 → use computed backoff at top of loop
+
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff with jitter, capped at 60s.
-			seconds := base*math.Pow(2, float64(attempt-1)) + rng.Float64()
-			if seconds > 60 {
-				seconds = 60
+			delay, source := computeRetryDelay(nextSleep, attempt, base, rng)
+			if nextSleep > retryAfterCap {
+				logger.Warn("Retry-After exceeds cap; clamping",
+					"hint", nextSleep.String(), "cap", retryAfterCap.String())
 			}
-			delay := time.Duration(seconds * float64(time.Second))
 			logger.Info("retrying tts chunk",
-				"attempt", attempt+1, "of", attempts, "delay", delay.String())
+				"attempt", attempt+1, "of", attempts,
+				"delay", delay.String(), "delay_source", source)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(delay):
 			}
+			nextSleep = 0
 		}
 
 		body, err := client.Synthesize(ctx, text)
@@ -331,7 +383,10 @@ func synthesizeChunkWithRetry(
 				return fmt.Errorf("fatal tts (status %d): %w", apiErr.StatusCode, err)
 			}
 			logger.Warn("retryable tts error",
-				"status", apiErr.StatusCode, "attempt", attempt+1)
+				"status", apiErr.StatusCode,
+				"attempt", attempt+1,
+				"retry_after", apiErr.RetryAfter.String())
+			nextSleep = apiErr.RetryAfter
 			continue
 		}
 		// Transport-level error. Pane-9's classifier marks DNS,
@@ -340,6 +395,7 @@ func synthesizeChunkWithRetry(
 		// pane-9 exports a public classifier, swap in.
 		logger.Warn("transport tts error (treating as retryable)",
 			"err", err.Error(), "attempt", attempt+1)
+		nextSleep = 0
 	}
 	return fmt.Errorf("tts gave up after %d attempts: %w", attempts, lastErr)
 }

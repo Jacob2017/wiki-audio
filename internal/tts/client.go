@@ -31,10 +31,18 @@ type Client struct {
 
 // APIError classifies non-200 responses so higher layers can apply
 // retry/backoff policy without scraping strings.
+//
+// RetryAfter carries the parsed `Retry-After` header value (RFC 7231
+// §7.1.3 — supports both seconds and HTTP-date forms). Zero when
+// the header was absent, malformed, or specified a delay outside
+// the [0, 300s] range that parseRetryAfter accepts. Callers should
+// honor this hint over computed backoff when non-zero, capped to
+// whatever per-call ceiling the caller enforces.
 type APIError struct {
 	StatusCode int
 	Body       []byte
 	Retryable  bool
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string {
@@ -126,10 +134,17 @@ func (c *Client) Synthesize(ctx context.Context, text string) (io.ReadCloser, er
 		return nil, fmt.Errorf("read error response: %w", readErr)
 	}
 
+	// Parse Retry-After per RFC 7231 §7.1.3. parseRetryAfter (in
+	// retry.go) returns (0, false) on missing/malformed/out-of-range
+	// values, which surfaces here as RetryAfter == 0 — exactly what
+	// the higher-level retry loop expects as the "no hint" signal.
+	retryAfter, _ := parseRetryAfter(resp.Header, time.Now())
+
 	return nil, &APIError{
 		StatusCode: resp.StatusCode,
 		Body:       body,
 		Retryable:  retryableStatusCode(resp.StatusCode),
+		RetryAfter: retryAfter,
 	}
 }
 
