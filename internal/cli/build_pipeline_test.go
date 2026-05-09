@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -639,5 +641,71 @@ func TestBuildOneEssayFull_HashMatchSignalsSkip(t *testing.T) {
 	if !ok || existing.BodyHash != doc.BodyHash {
 		t.Errorf("hash-skip predicate broken: ok=%v, existing=%q vs doc=%q",
 			ok, existing.BodyHash, doc.BodyHash)
+	}
+}
+
+// --- wa-exd: ffprobe duration --------------------------------------------
+
+// TestProbeDurationSeconds_RealMP3 generates a known-duration silent
+// MP3 via ffmpeg and asserts probeDurationSeconds returns ~that
+// duration. Skips gracefully if either ffmpeg or ffprobe is absent
+// from PATH (e.g. stripped CI image).
+func TestProbeDurationSeconds_RealMP3(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skipf("ffmpeg not on PATH: %v", err)
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skipf("ffprobe not on PATH: %v", err)
+	}
+
+	const wantSeconds = 5.0
+	tmp := t.TempDir()
+	mp3 := filepath.Join(tmp, "fixture.mp3")
+
+	// Render a 5-second silent MP3. anullsrc generates silence; -t
+	// caps duration; libmp3lame is the encoder ffmpeg uses for the
+	// real concat output too.
+	gen := exec.Command("ffmpeg",
+		"-loglevel", "error",
+		"-y",
+		"-f", "lavfi",
+		"-i", "anullsrc=r=44100:cl=mono",
+		"-t", fmt.Sprintf("%g", wantSeconds),
+		"-c:a", "libmp3lame",
+		"-b:a", "64k",
+		mp3,
+	)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg fixture: %v\n%s", err, out)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	got := probeDurationSeconds(context.Background(), mp3, logger)
+	// MP3 frame quantization can move the reported duration by a
+	// few hundred ms either way; accept ±0.5s.
+	if got < wantSeconds-0.5 || got > wantSeconds+0.5 {
+		t.Errorf("probeDurationSeconds = %g; want within ±0.5 of %g", got, wantSeconds)
+	}
+}
+
+// TestProbeDurationSeconds_NonexistentReturnsZero pins the
+// best-effort contract: a missing file logs WARN and returns 0,
+// it does NOT fail the build.
+func TestProbeDurationSeconds_NonexistentReturnsZero(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skipf("ffprobe not on PATH: %v", err)
+	}
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist.mp3")
+	got := probeDurationSeconds(context.Background(), missing, logger)
+	if got != 0 {
+		t.Errorf("missing file should return 0; got %g", got)
+	}
+	for _, want := range []string{"level=WARN", "ffprobe duration failed", "DurationSeconds=0"} {
+		if !strings.Contains(logBuf.String(), want) {
+			t.Errorf("warning log missing %q in:\n%s", want, logBuf.String())
+		}
 	}
 }

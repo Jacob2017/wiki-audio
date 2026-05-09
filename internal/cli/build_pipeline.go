@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -246,21 +247,54 @@ func buildOneEssayFull(
 	}
 	now := time.Now().UTC()
 	entry := &model.ManifestEntry{
-		Slug:          slug,
-		Title:         doc.Meta.Title,
-		BodyHash:      doc.BodyHash,
-		VoiceID:       cfg.TTS.VoiceID,
-		ModelID:       cfg.TTS.ModelID,
-		CharCount:     doc.CharCount,
-		ChunkCount:    len(chunks),
-		FileSizeBytes: info.Size(),
-		// DurationSeconds: deferred — needs ffprobe or a duration
-		// extractor pass. Fillable in wa-4cw.5's polish or in
-		// publish (Phase F can lazy-fill before RSS gen).
-		GeneratedAt: now,
+		Slug:            slug,
+		Title:           doc.Meta.Title,
+		BodyHash:        doc.BodyHash,
+		VoiceID:         cfg.TTS.VoiceID,
+		ModelID:         cfg.TTS.ModelID,
+		CharCount:       doc.CharCount,
+		ChunkCount:      len(chunks),
+		FileSizeBytes:   info.Size(),
+		DurationSeconds: probeDurationSeconds(ctx, outPath, logger),
+		GeneratedAt:     now,
 		// R2Key/R2ETag/PublishedAt set in the publish phase.
 	}
 	return entry, nil
+}
+
+// probeDurationSeconds shells out to ffprobe to read the duration
+// of a concat output MP3. Best-effort (wa-exd): a missing ffprobe
+// binary, an unreadable file, or a parse failure logs a WARN and
+// returns 0 — duration is cosmetic in <itunes:duration>, not a
+// build correctness gate, so we never fail the build for it.
+//
+// ffprobe is a soft dependency that ships with the same Homebrew
+// / apt package as ffmpeg (which is a hard dependency for concat),
+// so on any operator's box where the build pipeline can succeed
+// at concat, ffprobe is available too. This helper exists for the
+// edge case (stripped CI image, custom build of ffmpeg without
+// the ffprobe sibling) and to keep the field correctness-bounded
+// instead of build-bounded.
+func probeDurationSeconds(ctx context.Context, path string, logger *slog.Logger) float64 {
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		logger.Warn("ffprobe duration failed (cosmetic; entry.DurationSeconds=0)",
+			"path", path, "err", err.Error())
+		return 0
+	}
+	secs, parseErr := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if parseErr != nil {
+		logger.Warn("ffprobe output did not parse as seconds (cosmetic; entry.DurationSeconds=0)",
+			"path", path, "raw", string(out), "err", parseErr.Error())
+		return 0
+	}
+	return secs
 }
 
 // retryAfterCap bounds how long the build pipeline will sleep on a
