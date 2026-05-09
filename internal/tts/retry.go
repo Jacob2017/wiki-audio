@@ -74,6 +74,16 @@ func classifyHTTPStatus(statusCode int, headers http.Header, attempt int, baseSe
 			return retryDecision{verdict: retryVerdictRetryable, sleep: sleep}
 		}
 		return retryDecision{verdict: retryVerdictRetryable, sleep: computeBackoff(attempt, baseSeconds, rng)}
+	case statusCode == http.StatusRequestTimeout:
+		// 408 (Request Timeout) is retryable: the server told us it
+		// gave up waiting, which on a fresh attempt with backoff
+		// commonly succeeds. wa-wcu pinned this case explicitly so
+		// classifyHTTPStatus and client.retryableStatusCode agree —
+		// previously 408 fell through to the 4xx-default branch and
+		// reported fatal, contradicting *APIError.Retryable=true on
+		// the same status. Retry-After is not standard on 408, so
+		// computed backoff is the only signal.
+		return retryDecision{verdict: retryVerdictRetryable, sleep: computeBackoff(attempt, baseSeconds, rng)}
 	case statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden:
 		return retryDecision{verdict: retryVerdictFatal}
 	case statusCode >= 500 && statusCode <= 599:

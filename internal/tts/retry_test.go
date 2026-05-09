@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"net"
@@ -153,6 +154,16 @@ func TestClassifyHTTPResponse(t *testing.T) {
 			wantSleepMax: 3 * time.Second,
 		},
 		{
+			// wa-wcu pin: 408 (Request Timeout) is retryable in
+			// classifyHTTPStatus, matching client.retryableStatusCode
+			// — not the 4xx-default fatal branch.
+			name:         "http_408",
+			statusCode:   http.StatusRequestTimeout,
+			wantVerdict:  retryVerdictRetryable,
+			wantSleepMin: 2 * time.Second,
+			wantSleepMax: 3 * time.Second,
+		},
+		{
 			name:        "http_402",
 			statusCode:  http.StatusPaymentRequired,
 			wantVerdict: retryVerdictFatal,
@@ -206,6 +217,59 @@ func TestClassifyHTTPResponse(t *testing.T) {
 			}
 			if !strings.Contains(logBuf.String(), "verdict="+tt.wantVerdict.String()) {
 				t.Fatalf("log missing verdict %q: %q", tt.wantVerdict, logBuf.String())
+			}
+		})
+	}
+}
+
+// TestStatusClassificationConsistency pins the wa-wcu invariant:
+// for every HTTP status code used by §5.3's retry contract, both
+// classifiers in package tts agree on whether it is retryable.
+//
+//   - client.retryableStatusCode(code)        — the verdict baked
+//     into APIError.Retryable when client.go assembles the error
+//     from a non-2xx response.
+//   - classifyHTTPStatus(code, …).verdict     — the verdict the
+//     retry loop uses when it has the raw http.Response.
+//
+// Two functions classifying the same input must not disagree, even
+// if the divergence has no current production caller (a future
+// caller using the wrong one would silently get the wrong answer).
+func TestStatusClassificationConsistency(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.May, 9, 5, 0, 0, 0, time.UTC)
+
+	codes := []int{
+		http.StatusOK,
+		http.StatusBadRequest,
+		http.StatusPaymentRequired,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusRequestTimeout, // wa-wcu — the original divergence
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	}
+
+	for _, code := range codes {
+		code := code
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			t.Parallel()
+			clientSays := retryableStatusCode(code)
+			classifyVerdict := classifyHTTPStatus(code, nil, 0, retryBaseSeconds, deterministicRand(), now).verdict
+			classifySays := classifyVerdict == retryVerdictRetryable
+
+			// http_200 is special: client.retryableStatusCode is
+			// undefined for 200 (callers don't construct APIError
+			// for success responses) and reports false; classify
+			// reports retryVerdictSuccess (also not retryable).
+			// Both agree it isn't a retry candidate, which is what
+			// the consistency invariant cares about.
+			if clientSays != classifySays {
+				t.Errorf("status %d: retryableStatusCode=%v, classifyHTTPStatus=%v (verdict=%s) — divergence",
+					code, clientSays, classifySays, classifyVerdict)
 			}
 		})
 	}
