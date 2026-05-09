@@ -141,7 +141,7 @@ voice_label = "Christopher"          # display only; can be anything
 # request_timeout_s    = 60                    # per-chunk HTTP timeout
 # retry_attempts       = 3                     # total per-chunk attempts incl. first
 # retry_backoff_base_s = 2                     # exponential backoff base; jittered, capped at 60s
-# output_format        = "mp3_44100_64"        # 64 kbps mono — universal podcast support, ~12 MB/essay
+# output_format        = "mp3_44100_192"       # 192 kbps mono — A/B-validated for Christopher voice (PLAN §8.7); ~85 MB/hour
 
 [r2]
 # Cloudflare R2 account ID and bucket name. Both REQUIRED.
@@ -280,11 +280,13 @@ is roughly:
 
 - `tmp/` peak: ~50 MB during a bulk build (one essay at a time, ~15
   chunks × ~1 MB each). Cleared after each successful concat.
-- `out/` steady-state: **~600 MB** across all 53 finalized MP3s
-  (~12 MB/essay at the default 64 kbps mp3_44100_64 profile).
+- `out/` steady-state: **~3.6 GB** across all 53 finalized MP3s
+  (~70 MB/essay at the default 192 kbps mp3_44100_192 profile —
+  see PLAN §8.7 for the empirical-A/B rationale).
 - `skipped.txt`: kilobytes at most.
 
-Plan ~1 GB headroom on the cache filesystem before a bulk build.
+Plan ~5 GB headroom on the cache filesystem before a bulk build (3.6
+GB final + tmp peak + slack).
 
 ### Cloudflare R2 — source of truth for published state
 

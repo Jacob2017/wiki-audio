@@ -150,7 +150,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"DefaultRequestTimeoutS", DefaultRequestTimeoutS, 60.0},
 		{"DefaultRetryAttempts", DefaultRetryAttempts, 3},
 		{"DefaultRetryBackoffBase", DefaultRetryBackoffBase, 2.0},
-		{"DefaultOutputFormat", DefaultOutputFormat, "mp3_44100_64"},
+		{"DefaultOutputFormat", DefaultOutputFormat, "mp3_44100_192"},
 		{"DefaultFeedPath", DefaultFeedPath, "pg.xml"},
 		{"DefaultLanguage", DefaultLanguage, "en-us"},
 		{"MinBodyChars", MinBodyChars, 200},

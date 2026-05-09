@@ -13,7 +13,14 @@ voice_id = ""
 voice_label = "Christopher"
 # Defaults applied when omitted: model_id="eleven_flash_v2_5",
 # chunk_max_chars=4000, request_timeout_s=60, retry_attempts=3,
-# retry_backoff_base_s=2, output_format="mp3_44100_64".
+# retry_backoff_base_s=2, output_format="mp3_44100_192".
+#
+# 192 kbps mono is the validated default — A/B testing on the
+# Christopher voice (Phase E spike, 2026-05-09) showed audibly
+# cleaner sibilants vs 64/128 kbps. ElevenLabs bills on input
+# characters, not output bitrate, so the higher quality is free
+# at synth time; storage rounds to ~3.6 GB across 53 essays
+# (~$0.054/month on R2). See PLAN §8.7.
 
 [r2]
 # Cloudflare R2 account ID and bucket name. Both required.

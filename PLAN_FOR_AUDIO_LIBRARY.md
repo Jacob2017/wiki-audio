@@ -131,7 +131,7 @@ type TTSConfig struct {
     RequestTimeoutS  float64 `toml:"request_timeout_s"` // default 60
     RetryAttempts    int     `toml:"retry_attempts"`   // default 3
     RetryBackoffBase float64 `toml:"retry_backoff_base_s"` // default 2
-    OutputFormat     string  `toml:"output_format"`    // default "mp3_44100_64"
+    OutputFormat     string  `toml:"output_format"`    // default "mp3_44100_192"
 }
 
 type R2Config struct {
@@ -746,10 +746,33 @@ iTunes-namespaced RSS 2.0. Per `ManifestEntry`, emit:
 
 | Format | Bitrate | Size for 880k chars (~19h) | Quality for spoken voice | Verdict |
 |---|---|---|---|---|
-| **MP3 64 kbps mono** | 64 kbps | ~520 MB | Indistinguishable from higher bitrates for voice | **Chosen** — universal podcast support |
-| MP3 128 kbps mono | 128 kbps | ~1.0 GB | Same | Wasted bytes |
+| MP3 64 kbps mono | 64 kbps | ~520 MB | Audibly squeaky sibilants (s, t, sh) on Christopher voice; flash_v2_5 outputs ~128 kbps when 64 is requested anyway | Originally chosen; rejected post-spike |
+| MP3 128 kbps mono | 128 kbps | ~1.0 GB | Sibilants still squeaky on Christopher voice (Phase E spike) | Skipped |
+| **MP3 192 kbps mono** | 192 kbps | ~3.6 GB | Sibilants clean on Christopher voice + flash_v2_5 (operator A/B 2026-05-09) | **Chosen** — universal podcast support |
 | Opus 32 kbps | 32 kbps | ~260 MB | Excellent | Apple Podcasts has historically poor Opus support; avoid |
-| AAC 64 kbps | 64 kbps | ~520 MB | Slightly better than MP3 | Universal but no real win over MP3 |
+| AAC 192 kbps | 192 kbps | ~3.6 GB | Marginally better than MP3 | Universal but no real win over MP3 |
+
+#### Why mp3_44100_192
+
+44.1 kHz is the universal podcast sample rate. 192 kbps preserves
+sibilant clarity (s, t, sh) — A/B testing on Christopher voice +
+flash_v2_5 (Phase E spike, 2026-05-09) showed audible degradation at
+the 64-kbps-requested-128-served output of ElevenLabs flash vs the
+192 kbps stream. Sibilants live at 4–8 kHz where MP3 compression
+bites hardest at low bitrates.
+
+Cost is ~3× storage and bandwidth vs 64 kbps. For 53 essays at ~1
+hour each: 192 kbps = ~3.6 GB total = ~$0.054/month R2 storage.
+Rounding error against the $99 one-shot synth budget. ElevenLabs
+bills on input characters, not output bitrate, so synth cost is
+unchanged.
+
+Originally specced at 64 kbps based on the assumption that bitrate
+is imperceptible for spoken voice. Empirical operator testing
+disproved — for THIS voice (Christopher) and THIS model
+(eleven_flash_v2_5), 64/128 kbps sibilants are noticeably worse than
+192. Future voices or models may move this number; track via the
+spec comparison table above.
 
 ---
 

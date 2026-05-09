@@ -153,7 +153,7 @@ const (
 	DefaultRequestTimeoutS  = 60.0
 	DefaultRetryAttempts    = 3
 	DefaultRetryBackoffBase = 2.0
-	DefaultOutputFormat     = "mp3_44100_64"
+	DefaultOutputFormat     = "mp3_44100_192"
 	DefaultFeedPath         = "pg.xml"
 	DefaultLanguage         = "en-us"
 )
