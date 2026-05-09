@@ -148,8 +148,16 @@ before re-debating the design.
 - **Cache-control** — Worker responses set `cache-control: private`
   so Cloudflare's edge does not cache across token values. Removing
   this is a leak path.
-- **Pre-commit guard** — gitleaks via the agent-mail pre-commit hook
-  defends against accidental `.env` commits. Cross-link **wa-76r.5**.
+- **Pre-commit guard** — `.githooks/pre-commit` runs gitleaks on the
+  staged diff before each commit (defense-in-depth alongside the
+  CI workflow at `.github/workflows/gitleaks.yml`). Opt in per clone:
+  ```
+  git config core.hooksPath .githooks
+  ```
+  The hook is friendly: missing-gitleaks falls through with a hint
+  rather than blocking. CI catches anything the local hook misses.
+  Bypass for an emergency commit with `git commit --no-verify` (CI
+  will still flag it). Cross-link **wa-76r.5**.
 - **Never log secrets** — token, ElevenLabs API key, every key/value
   loaded from `.env`. Slog handlers must redact; tests assert no
   secret substring appears in captured logs.

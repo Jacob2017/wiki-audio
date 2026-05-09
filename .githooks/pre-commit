@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# wiki-audio pre-commit hook (wa-76r.5).
+#
+# Runs gitleaks against the staged content (NOT the working tree, NOT
+# the full history) and aborts the commit on any finding. Catches a
+# secret accidentally inlined into source or a test fixture before it
+# leaves the developer's machine.
+#
+# Defense-in-depth, NOT the primary defense:
+#   1. .gitignore excludes .env, .env.*, *.mp3 — primary defense
+#   2. CI runs full-history `gitleaks detect` on every push and PR
+#      via .github/workflows/gitleaks.yml — catches anything that
+#      slipped past local hooks (e.g. from a contributor who didn't
+#      opt in).
+#   3. THIS hook — fastest feedback loop; lets the developer fix the
+#      diff before the bad commit even exists.
+#
+# Enable per-clone (this repo only, not all your repos):
+#   git config core.hooksPath .githooks
+#
+# Bypass for an emergency commit (PR review etc. will catch it):
+#   git commit --no-verify
+#
+# Allowlist + custom rules live in .gitleaks.toml at the repo root.
+# That file is shared with the CI workflow so local and CI agree on
+# what counts as a leak. Edit there to add legitimate placeholder
+# hostnames or test-fixture tokens.
+
+set -euo pipefail
+
+# If gitleaks is missing, print an actionable hint and exit 0. We
+# deliberately do NOT block the commit when the tool isn't installed:
+#   - CI will catch anything we miss (defense-in-depth #2 above).
+#   - Hard-failing on a missing tool punishes contributors who
+#     haven't yet read the README — that's the wrong-direction
+#     incentive. A hint plus pass-through is the friendliest landing.
+if ! command -v gitleaks >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+[pre-commit] gitleaks not on PATH — skipping the local secret scan.
+            CI (.github/workflows/gitleaks.yml) will scan the push.
+            To enable local scanning:
+              macOS:   brew install gitleaks
+              Debian:  apt install gitleaks   (or `go install github.com/gitleaks/gitleaks/v8@latest`)
+              Arch:    pacman -S gitleaks
+EOF
+    exit 0
+fi
+
+# `gitleaks protect --staged` scans only the staged diff — the exact
+# bytes about to land in the next commit. `--redact` keeps any leaked
+# secret out of the hook's own output (we don't want a re-leak via
+# scrollback). `-v` makes findings legible.
+#
+# The `--config` flag isn't strictly required (gitleaks auto-discovers
+# .gitleaks.toml at the repo root) but pinning it makes the local hook
+# behavior identical to the CI workflow regardless of cwd.
+REPO_ROOT=$(git rev-parse --show-toplevel)
+CONFIG="${REPO_ROOT}/.gitleaks.toml"
+
+if [ -f "$CONFIG" ]; then
+    gitleaks protect --staged --redact -v --config="$CONFIG"
+else
+    gitleaks protect --staged --redact -v
+fi
+
+# gitleaks exits non-zero on findings; `set -e` aborts the commit
+# automatically. If we reach this point, the staged diff is clean.
