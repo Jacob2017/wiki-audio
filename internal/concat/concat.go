@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Jacob2017/wiki-audio/internal/atomic"
 )
 
 // Defaults align with PLAN §5.4.
@@ -200,6 +202,12 @@ func runFFmpeg(ctx context.Context, opts Options, args []string) error {
 
 // copyFile is the single-chunk fast path AND the cross-filesystem rename
 // fallback in Concat. Errors are wrapped with which side failed.
+//
+// The destination is written via the atomic helper (wa-76r.2) so a
+// crash mid-copy leaves any pre-existing dst untouched. This matters
+// most for the single-chunk-essay path, where dst is the final MP3
+// that publish reads from — a half-copied MP3 there would round-trip
+// to R2 on the next publish.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -207,15 +215,13 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("copy create dst %q: %w", dst, err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+	if err := atomic.WriteAtomic(dst, func(w io.Writer) error {
+		_, copyErr := io.Copy(w, in)
+		return copyErr
+	}, 0o644); err != nil {
 		return fmt.Errorf("copy %q → %q: %w", src, dst, err)
 	}
-	return out.Close()
+	return nil
 }
 
 // cleanIntermediates removes step_NNN.mp3 files from tmpDir on success.

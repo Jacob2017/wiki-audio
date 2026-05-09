@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Jacob2017/wiki-audio/internal/atomic"
 )
 
 // configTemplate is the on-disk seed for ~/.wiki-audio/config.toml
@@ -196,7 +198,7 @@ func writeConfigFile(path string, force bool) (string, error) {
 		return "", fmt.Errorf("init: stat %s: %w", path, err)
 	}
 
-	if err := os.WriteFile(path, []byte(configTemplate), 0o644); err != nil {
+	if err := atomic.WriteFile(path, []byte(configTemplate), 0o644); err != nil {
 		return "", fmt.Errorf("init: write %s: %w", path, err)
 	}
 	return fmt.Sprintf("created %s (with placeholders)", path), nil
@@ -249,16 +251,14 @@ func writeEnvFile(path string, force bool, token string) (string, bool, error) {
 	return fmt.Sprintf("updated %s     (chmod 600, token populated)", path), true, nil
 }
 
-// writeEnvWithMode writes data to path then explicitly chmods to
-// 0o600. os.WriteFile honors the umask, which on most systems means
-// 0o644 even when we pass 0o600 — the explicit chmod is the load-
-// bearing call, not the WriteFile mode.
+// writeEnvWithMode writes data to path atomically with mode 0o600.
+// The atomic helper chmods the temp file BEFORE Rename so the
+// publish window cannot leak a 0o644 mode (umask would otherwise
+// override os.WriteFile's perm), and a crash mid-write leaves any
+// pre-existing .env unchanged (wa-76r.2).
 func writeEnvWithMode(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := atomic.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("init: write %s: %w", path, err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("init: chmod %s: %w", path, err)
 	}
 	return nil
 }
