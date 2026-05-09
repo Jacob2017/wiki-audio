@@ -381,3 +381,25 @@ func TestTopUpTokenLineAppendsWhenInputHasNoTrailingNewline(t *testing.T) {
 		t.Errorf("expected append at end with separator: %s", out)
 	}
 }
+
+// TestConfigTemplateMatchesRepoExample is the wa-76r.9 drift guard:
+// the embedded `configTemplate` const (used by `wiki-audio init` to
+// scaffold ~/.wiki-audio/config.toml) MUST stay in lock-step with
+// the human-readable `config.example.toml` checked in at the repo
+// root. If you edit one, edit the other in the same PR.
+//
+// Test runs from the package dir (internal/cli/), so the example
+// file is two levels up.
+func TestConfigTemplateMatchesRepoExample(t *testing.T) {
+	const examplePath = "../../config.example.toml"
+	bytes, err := os.ReadFile(examplePath)
+	if err != nil {
+		t.Skipf("config.example.toml not found at %s (running from outside the repo?): %v", examplePath, err)
+	}
+	if string(bytes) != configTemplate {
+		t.Errorf("config.example.toml drifts from configTemplate; sync one to the other.\n" +
+			"  init.go's `configTemplate` const seeds new installs.\n" +
+			"  config.example.toml is the human-readable reference at the repo root.\n" +
+			"They MUST match byte-for-byte (wa-76r.9).")
+	}
+}

@@ -1,0 +1,33 @@
+# wiki-audio config — see github.com/Jacob2017/wiki-audio for docs.
+# Run `wiki-audio doctor` after editing to verify.
+
+[wiki]
+# Absolute path to the directory containing PG essay markdown files.
+# Each .md is one episode. Required.
+source_dir = ""
+
+[tts]
+# ElevenLabs voice ID to render with. PLAN §10 default is Christopher
+# (G17SuINrv2H9FC6nvetn). Browse api.elevenlabs.io/v1/voices for more.
+voice_id = ""
+voice_label = "Christopher"
+# Defaults applied when omitted: model_id="eleven_flash_v2_5",
+# chunk_max_chars=4000, request_timeout_s=60, retry_attempts=3,
+# retry_backoff_base_s=2, output_format="mp3_44100_64".
+
+[r2]
+# Cloudflare R2 account ID and bucket name. Both required.
+# Endpoint URL is derived: https://<account_id>.r2.cloudflarestorage.com
+account_id = ""
+bucket = ""
+
+[feed]
+# Public Worker URL that fronts the R2 bucket. Must include scheme.
+# Production hosts MUST use https:// for transport security.
+base_url = "https://wiki-audio.example.workers.dev"
+title = "PG Essays"
+description = "Paul Graham essays read aloud."
+author = "Paul Graham"
+owner_email = ""
+# Optional: cover_image_url = "https://..."
+# Defaults applied when omitted: feed_path="pg.xml", language="en-us".
