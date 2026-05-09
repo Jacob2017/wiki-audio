@@ -1,0 +1,69 @@
+# gitleaks config for wiki-audio. Extends the default ruleset and
+# adds an allowlist for placeholder hostnames and test-fixture token
+# shapes that would otherwise produce false positives once the repo
+# flips public.
+#
+# Pane-3's pre-flip audit (Block C) confirmed zero real secrets in
+# history. This file is purely about suppressing false-positive
+# annotations on PRs so signal stays high.
+#
+# Reference: https://github.com/gitleaks/gitleaks#configuration
+
+title = "gitleaks config for Jacob2017/wiki-audio"
+
+[extend]
+# Inherit gitleaks' default rules (ElevenLabs sk_* keys, AWS-style
+# access key IDs which match Cloudflare R2 too, base64url tokens with
+# high entropy, etc.). useDefault=true keeps the upstream rule list
+# in sync; we only add allowlists, not custom rules.
+useDefault = true
+
+[allowlist]
+description = "wiki-audio placeholder hostnames + test-fixture tokens"
+
+# Path-based exclusions.
+#
+# .gitignore already prevents .env from being committed; the workflow
+# scans the full git history anyway. Listing the path here keeps the
+# scan fast on repos that DO commit a .env.example with empty values.
+paths = [
+  '''(.*?)\.lock$''',
+  '''(.*?)/testdata/''',
+]
+
+# Regex-based exclusions. Any matched secret-shaped string in the
+# repo that satisfies one of these regexes is treated as a known
+# placeholder.
+regexes = [
+  # Worker hostname placeholders used in templates and tests.
+  '''wiki-audio\.example\.workers\.dev''',
+  '''wiki-audio\.jabyrne\.workers\.dev''',
+  # Test-fixture markers — every test file uses these specific
+  # tokens to make secret-leak assertions unambiguous. They're
+  # not real keys; gitleaks shouldn't flag them.
+  '''CANARY''',
+  # Generic test-fixture token prefixes used in internal/cli/*_test.go
+  # and internal/config/*_test.go.
+  '''el-test-key''',
+  '''test-r2-id''',
+  '''test-r2-secret''',
+  '''test-access-token''',
+  '''test-voice''',
+  # Example token used in version_test.go ldflags injection assertion.
+  '''abc1234''',
+  # The §9.1 token-format example in PLAN_FOR_AUDIO_LIBRARY.md
+  # ("supersecret43chars..." in a documentation example).
+  '''supersecret43chars''',
+]
+
+# Stop-words. Lines containing these substrings get extra trust —
+# they're typically docstrings or comments explaining what the regex
+# would match. Avoids tripping on PLAN.md's own description of token
+# shapes.
+stopwords = [
+  "example",
+  "placeholder",
+  "fixture",
+  "test-",
+  "TODO",
+]

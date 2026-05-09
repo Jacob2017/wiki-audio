@@ -1,0 +1,52 @@
+# gitleaks scan — third line of defense against committed secrets per
+# PLAN §6. The first two are: .env lives outside the repo by default
+# (~/.wiki-audio/.env) and the repo's .gitignore excludes .env. This
+# workflow catches a secret accidentally inlined into source or a
+# test fixture before the PR can merge.
+#
+# Why a separate workflow (not folded into release.yml): release runs
+# on `v*` tag push and is gated by the assumption that main is already
+# clean. Gitleaks must run on EVERY push to main and EVERY PR — the
+# tag-push trigger is too late to be useful for prevention. Keeping
+# the two workflows independent also means a gitleaks failure on a
+# feature branch doesn't block a release that already passed scan.
+#
+# Allowlist + custom rules live in .gitleaks.toml at the repo root —
+# gitleaks-action picks it up automatically. See that file for
+# placeholder hostnames and test-fixture token shapes that are safe
+# to ignore.
+
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  # The action uses GITHUB_TOKEN to create check runs / annotations
+  # on PRs. No write permissions to contents are needed.
+  contents: read
+  pull-requests: read
+
+jobs:
+  scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — gitleaks scans the whole git log, not just HEAD)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # GITHUB_TOKEN is auto-provisioned per-run by Actions; the
+          # action uses it to attach scan annotations to the PR. No
+          # extra secret to rotate.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is required only for organizations on
+          # gitleaks Pro. Jacob2017/wiki-audio is a personal repo —
+          # the action runs free without a license. If the repo ever
+          # transfers to an org, add GITLEAKS_LICENSE as a secret.
