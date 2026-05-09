@@ -99,19 +99,26 @@ func (c *Client) Synthesize(ctx context.Context, text string) (io.ReadCloser, er
 	}
 
 	reqBody, err := json.Marshal(struct {
-		Text         string `json:"text"`
-		ModelID      string `json:"model_id"`
-		OutputFormat string `json:"output_format"`
+		Text    string `json:"text"`
+		ModelID string `json:"model_id"`
 	}{
-		Text:         text,
-		ModelID:      c.modelID,
-		OutputFormat: c.outputFormat,
+		Text:    text,
+		ModelID: c.modelID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal tts request: %w", err)
 	}
 
+	// output_format is a QUERY-STRING parameter on the EL TTS API, NOT
+	// a JSON body field. Sending it in the body is silently ignored
+	// and the server falls back to the per-model default (128 kbps for
+	// flash_v2_5), regardless of the configured value. wa-aoa surfaced
+	// this during the wa-7t6 spike — pre-fix, every call rendered at
+	// 128 kbps even when output_format was set to "mp3_44100_192".
 	endpoint := apiBaseURL + "/v1/text-to-speech/" + url.PathEscape(c.voiceID)
+	if c.outputFormat != "" {
+		endpoint += "?output_format=" + url.QueryEscape(c.outputFormat)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err

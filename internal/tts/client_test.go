@@ -32,22 +32,27 @@ func TestClientSynthesizeHappyPath(t *testing.T) {
 			t.Fatalf("content-type = %q, want %q", got, want)
 		}
 
-		var req struct {
-			Text         string `json:"text"`
-			ModelID      string `json:"model_id"`
-			OutputFormat string `json:"output_format"`
+		// wa-aoa pin: output_format MUST land as a query parameter,
+		// not a JSON body field. ElevenLabs silently ignores body
+		// fields it doesn't recognize, so a regression that re-puts
+		// it in the body would render at the per-model default
+		// (128 kbps for flash_v2_5) regardless of config.
+		if got, want := r.URL.Query().Get("output_format"), model.DefaultOutputFormat; got != want {
+			t.Fatalf("query output_format = %q, want %q", got, want)
 		}
+
+		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if got, want := req.Text, "hello world"; got != want {
+		if _, present := req["output_format"]; present {
+			t.Fatalf("output_format must NOT appear in JSON body (wa-aoa); body = %v", req)
+		}
+		if got, want := req["text"], "hello world"; got != want {
 			t.Fatalf("text = %q, want %q", got, want)
 		}
-		if got, want := req.ModelID, model.DefaultModelID; got != want {
+		if got, want := req["model_id"], model.DefaultModelID; got != want {
 			t.Fatalf("model_id = %q, want %q", got, want)
-		}
-		if got, want := req.OutputFormat, model.DefaultOutputFormat; got != want {
-			t.Fatalf("output_format = %q, want %q", got, want)
 		}
 
 		w.Header().Set("Content-Type", "audio/mpeg")
