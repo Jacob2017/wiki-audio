@@ -225,6 +225,10 @@ func runPublishCore(
 	}
 	logger.Info("manifest loaded", "entries", len(mft.Entries))
 
+	if mode != modeFeedOnly {
+		mergeLocalOnlyEntries(mft, logger)
+	}
+
 	switch mode {
 	case modeFeedOnly:
 		fmt.Fprintln(out, "feed-only mode: skipping diff + MP3 upload")
@@ -497,6 +501,43 @@ func feedItemCount(mft *model.Manifest) int {
 	return n
 }
 
+// mergeLocalOnlyEntries adds slugs from the local build-time manifest
+// (~/.cache/wiki-audio/manifest.json) that the R2-side manifest does
+// not yet know about. Without this, freshly-built episodes are
+// invisible to publish: Diff iterates over R2's view, so local-only
+// entries never reach Plan.ToUpload. First-publish on a fresh machine
+// (build → publish, no prior R2 manifest seed) is the case this
+// surfaces.
+//
+// Shared slugs are R2-wins: an entry that R2 already tracks is left
+// untouched here so we don't disturb R2Key/R2ETag/PublishedAt or any
+// other published metadata. The companion overlayLocalFeedFields
+// patches wa-bo5 feed fields onto shared entries afterward.
+//
+// Best-effort: a missing or unreadable local manifest logs and skips
+// — that's the legitimate state on a control machine that publishes
+// a manifest someone else built.
+func mergeLocalOnlyEntries(mft *model.Manifest, logger *slog.Logger) {
+	manifestPath := cache.Dir() + "/manifest.json"
+	local, err := readLocalManifest(manifestPath)
+	if err != nil {
+		logger.Warn("merge: local manifest unreadable; only R2-known slugs will publish",
+			"path", manifestPath, "err", err.Error())
+		return
+	}
+	added := 0
+	for slug, lEntry := range local.Entries {
+		if _, exists := mft.Entries[slug]; exists {
+			continue
+		}
+		mft.Entries[slug] = lEntry
+		added++
+	}
+	if added > 0 {
+		logger.Info("merge: local-only entries added to manifest", "count", added)
+	}
+}
+
 // overlayLocalFeedFields patches per-essay feed fields (SourceURL,
 // Description) on every entry in mft from the cached local manifest
 // (~/.cache/wiki-audio/manifest.json), if one exists. The publish
@@ -510,10 +551,6 @@ func feedItemCount(mft *model.Manifest) int {
 // unreadable, or lacks an entry for the slug, mft is left unchanged
 // for that slug. Only the two wa-bo5 fields are overlaid — the rest
 // (R2Key/R2ETag/PublishedAt/etc.) is owned by the publish path.
-//
-// This is the surgical fix for wa-bo5's bundled re-publish; a fuller
-// "merge local entries that R2 doesn't know about yet" sync belongs
-// to pane-9's r2/manifest area.
 func overlayLocalFeedFields(mft *model.Manifest, logger *slog.Logger) {
 	manifestPath := cache.Dir() + "/manifest.json"
 	local, err := readLocalManifest(manifestPath)

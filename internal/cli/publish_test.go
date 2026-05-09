@@ -449,6 +449,94 @@ func TestOverlayLocalFeedFields_OverlaysOnlyEmptyFields(t *testing.T) {
 	}
 }
 
+// First-publish on a fresh machine: local manifest has slugs the
+// R2-side manifest has never seen. mergeLocalOnlyEntries folds them
+// into mft before Diff so they reach ToUpload; the shared slug stays
+// R2-wins (R2Key/R2ETag/PublishedAt preserved, no re-upload).
+func TestPublish_MergesLocalOnlyEntriesIntoR2Manifest(t *testing.T) {
+	f := setupPublishFixture(t)
+
+	// R2 starts with one fully-published entry (alpha).
+	r2Body := []byte("alpha-on-r2")
+	preEtag, err := f.fake.PutObject(context.Background(),
+		"pg/alpha.mp3", bytes.NewReader(r2Body), int64(len(r2Body)), "audio/mpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	r2Mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {
+				Slug: "alpha", Title: "Alpha", BodyHash: "h-alpha-r2",
+				R2Key: "pg/alpha.mp3", R2ETag: preEtag, PublishedAt: &pub,
+			},
+		},
+	}
+	f.putManifestOnFake(t, r2Mft)
+
+	// Local manifest has alpha (already on R2; R2-wins) + 2 NEW slugs.
+	local := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", BodyHash: "h-alpha-LOCAL"}, // should NOT overwrite R2
+			"beta":  {Slug: "beta", Title: "Beta", BodyHash: "h-beta"},
+			"gamma": {Slug: "gamma", Title: "Gamma", BodyHash: "h-gamma"},
+		},
+	}
+	body, _ := json.Marshal(local)
+	if err := os.WriteFile(filepath.Join(cache.Dir(), "manifest.json"), body, 0o644); err != nil {
+		t.Fatalf("write local manifest: %v", err)
+	}
+	f.addCacheMP3(t, "beta", []byte("beta-body"))
+	f.addCacheMP3(t, "gamma", []byte("gamma-body"))
+
+	var out bytes.Buffer
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, false, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore: %v", err)
+	}
+
+	for _, slug := range []string{"beta", "gamma"} {
+		key := "pg/" + slug + ".mp3"
+		if _, err := f.fake.HeadObject(context.Background(), key); err != nil {
+			t.Errorf("expected %s on fake post-publish: %v", key, err)
+		}
+	}
+
+	// Alpha was NOT re-uploaded (R2-wins for shared slugs). Only the
+	// fixture's setup PutObject should appear in the operations log.
+	puts := 0
+	for _, op := range f.fake.Operations() {
+		if op.Name == "PutObject" && op.Key == "pg/alpha.mp3" {
+			puts++
+		}
+	}
+	if puts != 1 {
+		t.Errorf("alpha re-uploaded; PutObject(pg/alpha.mp3) calls = %d, want 1 (setup only)", puts)
+	}
+
+	if !strings.Contains(out.String(), "diff: 2 new, 0 changed, 0 stale-on-r2") {
+		t.Errorf("expected '2 new' diff; got: %s", out.String())
+	}
+
+	rc, err := f.fake.GetObject(context.Background(), manifest.PrimaryKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	var saved model.Manifest
+	raw, _ := io.ReadAll(rc)
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatalf("decode saved manifest: %v", err)
+	}
+	if len(saved.Entries) != 3 {
+		t.Errorf("saved manifest entries = %d, want 3 (alpha, beta, gamma)", len(saved.Entries))
+	}
+	if got := saved.Entries["alpha"].BodyHash; got != "h-alpha-r2" {
+		t.Errorf("alpha BodyHash post-publish = %q, want R2-wins 'h-alpha-r2' (local was 'h-alpha-LOCAL')", got)
+	}
+}
+
 // Missing local manifest is best-effort: overlay logs and returns
 // without modifying mft. Pin so a future "reject if local missing"
 // refactor surfaces.
