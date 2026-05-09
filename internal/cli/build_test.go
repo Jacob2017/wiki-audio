@@ -208,16 +208,24 @@ func TestBuildDryRun_MalformedEssayReportedSeparately(t *testing.T) {
 
 // --- Without --dry-run, build returns 'not yet implemented' --------------
 
-func TestBuildDryRun_RequiresFlag(t *testing.T) {
+// As of wa-4cw.5, plain `build` (no flags) runs the full §5 pipeline.
+// The fixture's stub .env intentionally omits the four required
+// secrets, so plain build surfaces a clear missing-env error from
+// LoadEnv. This is the user-facing error path: run `wiki-audio doctor`
+// to diagnose.
+func TestBuildPlainSurfacesMissingEnvError(t *testing.T) {
 	cfgPath, envPath := buildFixture(t, map[string]string{
 		"alpha.md": canonicalEssay("Alpha", "Alpha body."),
 	})
 	_, _, err := runBuild(t, cfgPath, envPath, "build")
 	if err == nil {
-		t.Fatal("plain `build` (no --dry-run) should error until wa-4cw.5 fills it in")
+		t.Fatal("plain `build` should error when required env vars are missing")
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("plain build should return 'not yet implemented'; got %q", err.Error())
+	if !strings.Contains(err.Error(), "ELEVENLABS_API_KEY") {
+		t.Errorf("error should name the missing env var; got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "wiki-audio doctor") {
+		t.Errorf("error should hint `wiki-audio doctor`; got %q", err.Error())
 	}
 }
 

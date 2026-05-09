@@ -39,6 +39,7 @@ type buildFlags struct {
 	dryRun          bool
 	extractOnly     bool
 	slug            string
+	force           bool
 	forceRegression bool
 }
 
@@ -59,7 +60,7 @@ func newBuildCmd() *cobra.Command {
 			case flags.dryRun:
 				return runBuildDryRun(cmd, flags)
 			default:
-				return notImplemented("build")(cmd, args)
+				return runBuildFull(cmd, flags)
 			}
 		},
 	}
@@ -70,6 +71,8 @@ func newBuildCmd() *cobra.Command {
 			"no chunking, no TTS, no file writes (§7 Phase D gate; wa-kyn.15)")
 	cmd.Flags().StringVar(&flags.slug, "slug", "",
 		"narrow to a single essay by slug (basename without .md, lowercased)")
+	cmd.Flags().BoolVar(&flags.force, "force", false,
+		"rebuild even if body_hash matches the manifest entry (per §3 build flags)")
 	cmd.Flags().BoolVar(&flags.forceRegression, "force-regression", false,
 		"downgrade extractor regression detection to a warning (regression check itself "+
 			"depends on r2 manifest fetch — currently a no-op pending wa-cfn.* / wa-76r.1)")
