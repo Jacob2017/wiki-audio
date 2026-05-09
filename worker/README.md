@@ -32,15 +32,81 @@ Requires `CLOUDFLARE_API_TOKEN` (or `wrangler login`). Deploy updates the existi
 
 ## Secret rotation
 
-Rotate the access token via:
+The full procedure. Run these steps in order — deviation breaks the "old token immediately invalidated" property.
+
+### 1. Generate a fresh token
 
 ```
-cd worker && wrangler secret put ACCESS_TOKEN
+NEW_TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+echo -n "$NEW_TOKEN" | wc -c   # MUST print 43
 ```
 
-Paste the new value at the prompt. Old token is invalidated within seconds (Worker propagation).
+The shape is `[A-Za-z0-9_-]{43}` (256 bits of entropy, base64url-encoded, no padding). Same shape as `wiki-audio init` produces from `crypto/rand`. See PLAN §9.1.
 
-The full rotation runbook (covers `~/.config/wiki-audio/.env`, 1Password, `wiki-audio publish --feed-only`, and re-subscribing in Pocket Casts) lives on bead **wa-76r.4**. Don't rotate without following all five storage locations or you will leave a stale token alive somewhere.
+### 2. Push to Cloudflare
+
+```
+cd worker
+set -a; . ~/.wiki-audio/.env; set +a    # for CLOUDFLARE_API_TOKEN
+echo "$NEW_TOKEN" | wrangler secret put ACCESS_TOKEN
+```
+
+Wrangler reports `✨ Success! Uploaded secret ACCESS_TOKEN`. Within seconds the OLD token starts returning 403; the NEW token is live across all edge nodes.
+
+### 3. Update local config
+
+Replace the `WIKI_AUDIO_ACCESS_TOKEN=…` line in `~/.wiki-audio/.env`. Preserve every other secret (ELEVENLABS_API_KEY, R2 keys, etc.) verbatim — surgical edit only:
+
+```
+awk -v new="$NEW_TOKEN" '
+  /^WIKI_AUDIO_ACCESS_TOKEN=/ { print "WIKI_AUDIO_ACCESS_TOKEN=" new; next }
+  { print }
+' ~/.wiki-audio/.env > ~/.wiki-audio/.env.new
+chmod 600 ~/.wiki-audio/.env.new
+mv ~/.wiki-audio/.env.new ~/.wiki-audio/.env
+```
+
+### 4. Mirror to 1Password
+
+Update the "wiki-audio access token" entry. Keep the prior version in 1P history for ~30 days as a recovery anchor — if anything in the rotation goes wrong, the prior token is the rollback target.
+
+### 5. Verify (all three MUST hold)
+
+```
+OLD=…   # the value before step 1
+NEW=$NEW_TOKEN
+
+# OLD token must now 403:
+curl -sS -o /dev/null -w '%{http_code}\n' "https://<your-account>.workers.dev/pg.xml?t=$OLD"
+
+# NEW token must work — 404 if pg.xml absent, 200 if present:
+curl -sS -o /dev/null -w '%{http_code}\n' "https://<your-account>.workers.dev/pg.xml?t=$NEW"
+
+# Bare URL still 403:
+curl -sS -o /dev/null -w '%{http_code}\n' "https://<your-account>.workers.dev/pg.xml"
+```
+
+### 6. Republish the feed (only if Phase F is shipped)
+
+`wiki-audio publish --feed-only` regenerates `pg.xml` with the NEW token in every `?t=` URL. Skip this step if no consumers exist yet (pre-Phase-F state — feed file isn't published to R2).
+
+### 7. Re-subscribe in podcast app
+
+Pocket Casts: unsubscribe from the old feed URL, subscribe to the new feed URL. The token is in the query string, so the URL itself changed. Do this AFTER step 6 — otherwise the app pulls a feed whose enclosure URLs don't yet match the new token.
+
+### When to rotate
+
+- After any suspected leak (URL screenshotted, accidental commit, suspicion of compromise).
+- After laptop loss or any host compromise.
+- Yearly is *unnecessary* — query-string tokens have no built-in expiry; rotate on event, not on calendar. (The yearly check on **wa-3ia.4** is for dashboard drift, not token rotation.)
+
+### What NOT to do
+
+- Don't reorder steps 2 and 3. If you update local config first, the next thing your shell does (e.g. `wiki-audio publish`) signs URLs with the new token while the Worker still accepts only the old one — you'll get 403s and think the deploy broke.
+- Don't use `wrangler secret put --secret <value>` with the value on the command line. Pipe via stdin (`echo … | wrangler secret put ACCESS_TOKEN`) so the value never enters shell history.
+- Don't reuse a recently-rotated token. 256 bits of fresh entropy each rotation; `openssl rand -base64 32` is cheap.
+
+The full historical runbook with verification matrix lives on bead **wa-76r.4**.
 
 ## MUST-stay-private invariants
 
