@@ -119,7 +119,7 @@ func TestPublish_EmptyBucketUploadsAll(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, frozenTime())
+	err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime())
 	if err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestPublish_ExistingEtagMatchSkipsUpload(t *testing.T) {
 	// missing source file would surface as a read error.
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestPublish_ChangedEtagUploadsOverwrite(t *testing.T) {
 	f.addCacheMP3(t, "alpha", cacheBody)
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -271,7 +271,7 @@ func TestPublish_UploadOrderMP3sThenManifestThenFeed(t *testing.T) {
 	f.addCacheMP3(t, "alpha", []byte("alpha-body"))
 	f.addCacheMP3(t, "beta", []byte("beta-body"))
 
-	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
@@ -329,7 +329,7 @@ func TestPublish_PartialFailureLeavesOldFeedAndManifest(t *testing.T) {
 
 	failing := &failAfterN{Storage: f.fake, allowedPuts: 1, prefix: "pg/"}
 
-	err := runPublishCore(context.Background(), io.Discard, failing, f.cfg, f.tokens, frozenTime())
+	err := runPublishCore(context.Background(), io.Discard, failing, f.cfg, f.tokens, modeDefault, frozenTime())
 	if err == nil {
 		t.Fatal("expected error from partial-failure")
 	}
@@ -450,12 +450,182 @@ func TestPublish_DiffCountLogged(t *testing.T) {
 	f.addCacheMP3(t, "newone", []byte("n-body"))
 
 	var out bytes.Buffer
-	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, frozenTime()); err != nil {
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDefault, frozenTime()); err != nil {
 		t.Fatalf("runPublishCore: %v", err)
 	}
 
 	if !strings.Contains(out.String(), "diff: 1 new, 1 changed, 0 stale-on-r2") {
 		t.Errorf("expected mixed diff line; got: %s", out.String())
+	}
+}
+
+// --- modeFeedOnly (wa-i1l.8) ---
+
+// feed_only_skips_uploads: zero PutObject calls under pg/*.mp3
+// even when the diff would otherwise upload many. Use case: token
+// rotation regenerates the feed without re-uploading episodes.
+func TestPublish_FeedOnlySkipsMP3Uploads(t *testing.T) {
+	f := setupPublishFixture(t)
+	pub := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", Title: "Alpha", R2Key: "pg/alpha.mp3", R2ETag: "e1", PublishedAt: &pub},
+			"beta":  {Slug: "beta", Title: "Beta", R2Key: "pg/beta.mp3", R2ETag: "e2", PublishedAt: &pub},
+		},
+	}
+	f.putManifestOnFake(t, mft)
+	// Deliberately DON'T addCacheMP3 — feed-only must NOT read
+	// from cache. If the orchestrator accidentally tries to upload
+	// an MP3, the missing source file would surface as an error.
+
+	var out bytes.Buffer
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeFeedOnly, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore feed-only: %v", err)
+	}
+
+	for _, op := range f.fake.Operations() {
+		if op.Name != "PutObject" {
+			continue
+		}
+		if strings.HasPrefix(op.Key, "pg/") && strings.HasSuffix(op.Key, ".mp3") {
+			t.Errorf("feed-only mode performed mp3 PUT on %s; want zero", op.Key)
+		}
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "feed-only mode: skipping diff + MP3 upload") {
+		t.Errorf("missing feed-only banner; got: %s", got)
+	}
+	if !strings.Contains(got, "regenerating pg.xml") {
+		t.Errorf("feed-only must still regenerate pg.xml; got: %s", got)
+	}
+	if !strings.Contains(got, "feed live at https://wiki-audio.example.workers.dev/pg.xml?t=") {
+		t.Errorf("feed-only must print the feed URL; got: %s", got)
+	}
+}
+
+// feed_only_uploads_pgxml: exactly one PutObject for pg.xml. The
+// manifest is NOT re-saved — the manifest content is unchanged in
+// the rotation scenario, and skipping its Save avoids the .bak
+// rotation overhead for a no-op write.
+func TestPublish_FeedOnlyUploadsPgxmlAndSkipsManifest(t *testing.T) {
+	f := setupPublishFixture(t)
+	pub := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", Title: "Alpha", R2Key: "pg/alpha.mp3", R2ETag: "e1", PublishedAt: &pub},
+		},
+	}
+	f.putManifestOnFake(t, mft)
+
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeFeedOnly, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore feed-only: %v", err)
+	}
+
+	pgxmlPuts, manifestPuts := 0, 0
+	for _, op := range f.fake.Operations() {
+		if op.Name != "PutObject" {
+			continue
+		}
+		switch op.Key {
+		case "pg.xml":
+			pgxmlPuts++
+		case manifest.PrimaryKey:
+			manifestPuts++
+		}
+	}
+	if pgxmlPuts != 1 {
+		t.Errorf("pg.xml PUTs = %d, want exactly 1", pgxmlPuts)
+	}
+	// The setup's putManifestOnFake counts as 1 manifest PUT
+	// before runPublishCore ran. feed-only mode must not add to
+	// that count (no Save).
+	if manifestPuts != 1 {
+		t.Errorf("manifest PUTs = %d, want exactly 1 (test setup only — feed-only must not Save)", manifestPuts)
+	}
+}
+
+// --- modeDryRun (wa-i1l.9) ---
+
+// dry_run_zero_writes: NO PUT/Delete calls beyond the test's
+// pre-populate. Use case: pre-bulk-run sanity check.
+func TestPublish_DryRunZeroWrites(t *testing.T) {
+	f := setupPublishFixture(t)
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", Title: "Alpha"},
+			"beta":  {Slug: "beta", Title: "Beta"},
+		},
+	}
+	f.putManifestOnFake(t, mft)
+	// Don't addCacheMP3 — dry-run prints "size unknown" when the
+	// cache is absent and that's fine; the test should still pass.
+
+	// Snapshot Operations count BEFORE runPublishCore so the
+	// pre-populate's PUT doesn't mask a misbehaving dry-run.
+	preOps := len(f.fake.Operations())
+
+	if err := runPublishCore(context.Background(), io.Discard, f.fake, f.cfg, f.tokens, modeDryRun, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore dry-run: %v", err)
+	}
+
+	postOps := f.fake.Operations()
+	for _, op := range postOps[preOps:] {
+		switch op.Name {
+		case "PutObject", "DeleteObject":
+			t.Errorf("dry-run performed %s on %s; want zero writes", op.Name, op.Key)
+		}
+	}
+}
+
+// dry_run_prints_diff: stdout includes "would upload" text + the
+// final-state summary. Operator can read this and predict what
+// the real publish run would do.
+func TestPublish_DryRunPrintsDiffAndWouldUploadLines(t *testing.T) {
+	f := setupPublishFixture(t)
+	mft := &model.Manifest{
+		Version: model.ManifestSchemaVersion,
+		Entries: map[string]model.ManifestEntry{
+			"alpha": {Slug: "alpha", Title: "Alpha"},
+			"beta":  {Slug: "beta", Title: "Beta"},
+		},
+	}
+	f.putManifestOnFake(t, mft)
+	// Add cache file for one slug so size formatting differs.
+	f.addCacheMP3(t, "alpha", bytes.Repeat([]byte("X"), 4096))
+
+	var out bytes.Buffer
+	if err := runPublishCore(context.Background(), &out, f.fake, f.cfg, f.tokens, modeDryRun, frozenTime()); err != nil {
+		t.Fatalf("runPublishCore dry-run: %v", err)
+	}
+
+	got := out.String()
+	mustContain := []string{
+		"diff: 2 new, 0 changed, 0 stale-on-r2",
+		"would upload alpha.mp3",
+		"would upload beta.mp3",
+		"r2://wiki-audio/pg/alpha.mp3",
+		"r2://wiki-audio/pg/beta.mp3",
+		"would regenerate pg.xml",
+		"dry-run: no writes performed",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in dry-run output; got:\n%s", want, got)
+		}
+	}
+
+	// Cache-present alpha shows a real size; cache-absent beta
+	// shows "size unknown". Both flow through formatBytes /
+	// dryRunBodySize without erroring.
+	if !strings.Contains(got, "alpha.mp3 (4.0 KiB)") {
+		t.Errorf("expected alpha to show cached size; got:\n%s", got)
+	}
+	if !strings.Contains(got, "beta.mp3 (size unknown)") {
+		t.Errorf("expected beta to show size-unknown; got:\n%s", got)
 	}
 }
 

@@ -101,15 +101,40 @@ func newPublishCmd() *cobra.Command {
 // future refactor — swapping the order would corrupt the recovery
 // story.
 //
-// --feed-only and --dry-run are scaffolded here but their full
-// impls live in wa-i1l.8 and wa-i1l.9; this commit returns
-// "not yet implemented" for those branches.
-func runPublish(cmd *cobra.Command, flags *publishFlags) error {
-	if flags.feedOnly {
-		return notImplemented("publish --feed-only (wa-i1l.8)")(cmd, nil)
+// publishMode selects which subset of the orchestrator runs.
+// ModeFeedOnly skips Diff + uploads (used after token rotation —
+// only the feed needs regeneration). ModeDryRun stops after Diff
+// without making any R2 writes.
+type publishMode int
+
+const (
+	modeDefault publishMode = iota
+	modeFeedOnly
+	modeDryRun
+)
+
+func (m publishMode) String() string {
+	switch m {
+	case modeFeedOnly:
+		return "feed-only"
+	case modeDryRun:
+		return "dry-run"
+	default:
+		return "default"
 	}
-	if flags.dryRun {
-		return notImplemented("publish --dry-run (wa-i1l.9)")(cmd, nil)
+}
+
+// runPublish wires the cobra command surface into runPublishCore.
+// Flag parsing → mode selection → live R2 client construction.
+// runPublishCore is the pure-logic path that publish_test.go
+// drives with an r2.Fake.
+func runPublish(cmd *cobra.Command, flags *publishFlags) error {
+	mode := modeDefault
+	switch {
+	case flags.feedOnly:
+		mode = modeFeedOnly
+	case flags.dryRun:
+		mode = modeDryRun
 	}
 
 	ctx := cmd.Context()
@@ -132,13 +157,14 @@ func runPublish(cmd *cobra.Command, flags *publishFlags) error {
 		return fmt.Errorf("publish: %w", err)
 	}
 
-	// Pre-flight: WIKI_AUDIO_ACCESS_TOKEN MUST be present BEFORE we
-	// upload anything. Stamping the feed without it would either
-	// silently emit unstamped URLs (StampTokens logs a WARN) or
-	// require a redo of the whole publish — both worse than
-	// failing fast here.
+	// Pre-flight: WIKI_AUDIO_ACCESS_TOKEN must be present before
+	// any R2 write. Stamping the feed without it would silently
+	// emit unstamped URLs (StampTokens logs a WARN). Skipped in
+	// dry-run mode — the diff doesn't need the token, and the
+	// "no writes performed" exit message is more useful than a
+	// pre-flight refusal when the operator is just sanity-checking.
 	token := strings.TrimSpace(os.Getenv("WIKI_AUDIO_ACCESS_TOKEN"))
-	if token == "" {
+	if token == "" && mode != modeDryRun {
 		return errPublishNoToken
 	}
 
@@ -151,27 +177,39 @@ func runPublish(cmd *cobra.Command, flags *publishFlags) error {
 		return fmt.Errorf("publish: r2.New: %w", err)
 	}
 
-	return runPublishCore(ctx, cmd.OutOrStdout(), store, cfg, token, time.Now)
+	return runPublishCore(ctx, cmd.OutOrStdout(), store, cfg, token, mode, time.Now)
 }
 
 // runPublishCore is the orchestrator's pure logic, factored out so
 // publish_test.go can drive it with an r2.Fake and a frozen `now`.
-// nowFn is a closure (not time.Time) so the test can advance the
-// clock between subtests if desired.
 //
-// Errors here propagate out of runPublish and exit cobra
-// non-zero. A mid-batch error leaves the manifest in R2 unchanged
-// (Save runs only after every upload succeeds), preserving the
-// recovery story.
+// Modes:
+//   - modeDefault   — full flow: Load, Diff, upload MP3s, regenerate
+//                     feed, Save manifest, PUT feed.
+//   - modeFeedOnly  — Load + regenerate feed + PUT feed only. Skips
+//                     Diff and uploads. Use case: token rotation
+//                     (worker secret + .env updated, regen feed with
+//                     the new token-stamped URLs without re-uploading
+//                     any episodes). Manifest is NOT re-saved — the
+//                     manifest content is unchanged in this scenario,
+//                     and skipping the Save avoids the .bak rotation
+//                     overhead for a no-op write.
+//   - modeDryRun    — Load + Diff + print plan; no R2 writes. Use
+//                     case: pre-bulk-run sanity check.
+//
+// Errors propagate to runPublish and exit cobra non-zero. A mid-batch
+// error in modeDefault leaves the manifest in R2 unchanged (Save runs
+// only after every upload succeeds), preserving the recovery story.
 func runPublishCore(
 	ctx context.Context,
 	out io.Writer,
 	store r2.Storage,
 	cfg *model.Config,
 	token string,
+	mode publishMode,
 	nowFn func() time.Time,
 ) error {
-	logger := slog.With("phase", "publish", "bucket", cfg.R2.Bucket)
+	logger := slog.With("phase", "publish", "bucket", cfg.R2.Bucket, "mode", mode.String())
 
 	mft, err := manifest.Load(ctx, store)
 	if err != nil {
@@ -179,6 +217,15 @@ func runPublishCore(
 	}
 	logger.Info("manifest loaded", "entries", len(mft.Entries))
 
+	switch mode {
+	case modeFeedOnly:
+		fmt.Fprintln(out, "feed-only mode: skipping diff + MP3 upload")
+		return runPublishFeedOnlyTail(ctx, out, store, cfg, token, mft, logger)
+	case modeDryRun:
+		return runPublishDryRunTail(ctx, out, store, cfg, mft, logger)
+	}
+
+	// modeDefault: the full flow.
 	plan, err := publish.Diff(ctx, store, mft)
 	if err != nil {
 		return fmt.Errorf("publish: diff: %w", err)
@@ -229,6 +276,101 @@ func runPublishCore(
 		"unchanged", len(plan.Unchanged),
 		"stale_on_r2", len(plan.Stale))
 	return nil
+}
+
+// runPublishFeedOnlyTail handles wa-i1l.8: regenerate pg.xml with
+// the current token + manifest contents, PUT it. Skips Diff +
+// uploads + manifest Save. Caller already loaded the manifest.
+func runPublishFeedOnlyTail(
+	ctx context.Context,
+	out io.Writer,
+	store r2.Storage,
+	cfg *model.Config,
+	token string,
+	mft *model.Manifest,
+	logger *slog.Logger,
+) error {
+	feedXML, err := buildFeed(mft, cfg, token)
+	if err != nil {
+		return fmt.Errorf("publish: feed: %w", err)
+	}
+	if _, err := store.PutObject(ctx, feedKey,
+		bytes.NewReader(feedXML), int64(len(feedXML)), feedContentType); err != nil {
+		return fmt.Errorf("publish: put %s: %w", feedKey, err)
+	}
+	fmt.Fprintf(out, "regenerating pg.xml (%d items) → r2://%s/%s ✓\n",
+		feedItemCount(mft), cfg.R2.Bucket, feedKey)
+
+	feedURL, err := buildFeedURL(cfg.Feed.BaseURL, token)
+	if err != nil {
+		return fmt.Errorf("publish: build feed URL: %w", err)
+	}
+	fmt.Fprintf(out, "feed live at %s\n", feedURL)
+	logger.Info("feed-only complete",
+		"items", feedItemCount(mft),
+		"feed_key", feedKey)
+	return nil
+}
+
+// runPublishDryRunTail handles wa-i1l.9: compute the diff, print
+// what WOULD be uploaded + the final feed URL, perform NO R2
+// writes. Manifest already loaded by caller.
+//
+// The "would upload" lines mirror the modeDefault upload progress
+// format so an operator can A/B the dry-run output against a real
+// run and read the same shapes.
+func runPublishDryRunTail(
+	ctx context.Context,
+	out io.Writer,
+	store r2.Storage,
+	cfg *model.Config,
+	mft *model.Manifest,
+	logger *slog.Logger,
+) error {
+	plan, err := publish.Diff(ctx, store, mft)
+	if err != nil {
+		return fmt.Errorf("publish: diff: %w", err)
+	}
+	fmt.Fprintln(out, plan.String())
+
+	uploads := append([]model.ManifestEntry{}, plan.ToUpload...)
+	uploads = append(uploads, plan.ToOverwrite...)
+	for _, entry := range uploads {
+		key := entry.R2Key
+		if key == "" {
+			key = publish.EpisodePrefix + entry.Slug + ".mp3"
+		}
+		size := dryRunBodySize(entry.Slug)
+		fmt.Fprintf(out, "would upload %s.mp3 (%s) → r2://%s/%s\n",
+			entry.Slug, size, cfg.R2.Bucket, key)
+	}
+	if len(plan.Stale) > 0 {
+		fmt.Fprintf(out, "stale on r2 (would NOT prune without --prune):\n")
+		for _, s := range plan.Stale {
+			fmt.Fprintf(out, "  - r2://%s/%s\n", cfg.R2.Bucket, s.Key)
+		}
+	}
+	fmt.Fprintf(out, "would regenerate pg.xml (%d items) → r2://%s/%s\n",
+		feedItemCount(mft), cfg.R2.Bucket, feedKey)
+	fmt.Fprintln(out, "dry-run: no writes performed")
+
+	logger.Info("dry-run complete",
+		"would_upload", len(uploads),
+		"unchanged", len(plan.Unchanged),
+		"stale_on_r2", len(plan.Stale))
+	return nil
+}
+
+// dryRunBodySize returns a human-readable size of the cached MP3
+// for slug, or "unknown" when the cache file is missing. Dry-run
+// shouldn't fail on a missing file — the operator may run dry-run
+// before any build has produced cache contents.
+func dryRunBodySize(slug string) string {
+	info, err := os.Stat(cache.OutPath(slug))
+	if err != nil {
+		return "size unknown"
+	}
+	return formatBytes(info.Size())
 }
 
 // uploadOneEpisode handles one ToUpload / ToOverwrite entry. Reads
