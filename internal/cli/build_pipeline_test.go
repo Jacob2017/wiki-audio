@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -452,6 +453,177 @@ func setTTSAPIBaseURLForTest(baseURL string) func() {
 // at the seam by populating a manifest with a fake hash, calling
 // buildOneEssayFull, and asserting the path is the (nil, nil)
 // skip-signal when force=false.
+// --- wa-cfx: chunk cache-skip ---------------------------------------------
+
+// TestSynthesizeChunkWithRetry_CacheHitSkipsAPI pins the wa-cfx
+// invariant: when a non-empty MP3 already exists at outPath,
+// synthesizeChunkWithRetry returns nil WITHOUT calling the
+// ElevenLabs API. The httptest server has a fail-on-call handler;
+// a reached-the-API path fails the test.
+func TestSynthesizeChunkWithRetry_CacheHitSkipsAPI(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		t.Errorf("API was called when chunk cache hit was expected: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setTTSAPIBaseURLForTest(srv.URL))
+
+	client := tts.NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "000.mp3")
+
+	// Prepopulate a non-empty MP3 — the wa-cfx skip predicate.
+	const cachedBytes = "cached-mp3-bytes-from-previous-run"
+	if err := os.WriteFile(outPath, []byte(cachedBytes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := synthesizeChunkWithRetry(context.Background(), client, "should-not-synth", outPath,
+		model.TTSConfig{VoiceID: "voice-123", RetryAttempts: 3, RetryBackoffBase: 2}, logger)
+	if err != nil {
+		t.Fatalf("synthesizeChunkWithRetry on cache hit: %v", err)
+	}
+
+	if got := calls.Load(); got != 0 {
+		t.Errorf("API got %d calls; want 0 (cache hit should skip synth)", got)
+	}
+
+	// Cached bytes preserved verbatim — the cache-skip path must
+	// not rewrite the file with stub content.
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != cachedBytes {
+		t.Errorf("cached bytes were overwritten;\n got %q\nwant %q", got, cachedBytes)
+	}
+}
+
+// TestSynthesizeChunkWithRetry_CacheHitFiveChunks is the bead's
+// stated acceptance: pre-create 5 fake chunks and run the synth
+// loop against an essay that chunks into 5; assert NO API calls.
+//
+// The bead asks for the full pipeline; we exercise the chunk-loop
+// seam directly because (a) it is the path that decides whether to
+// call the API, and (b) the full pipeline requires real ffmpeg /
+// extraction, which other tests already cover. The seam test is
+// the right granularity for the wa-cfx invariant.
+func TestSynthesizeChunkWithRetry_CacheHitFiveChunks(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		t.Errorf("API was called for chunk %d when all 5 should be cache hits", calls.Load())
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setTTSAPIBaseURLForTest(srv.URL))
+
+	client := tts.NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+	tmpDir := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfgTTS := model.TTSConfig{VoiceID: "voice-123", RetryAttempts: 3, RetryBackoffBase: 2}
+
+	// Pre-create 5 non-empty chunk files matching build_pipeline.go's
+	// "%03d.mp3" naming convention.
+	for i := 0; i < 5; i++ {
+		path := filepath.Join(tmpDir, fmt.Sprintf("%03d.mp3", i))
+		body := fmt.Sprintf("cached-chunk-%d-bytes", i)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for i := 0; i < 5; i++ {
+		path := filepath.Join(tmpDir, fmt.Sprintf("%03d.mp3", i))
+		err := synthesizeChunkWithRetry(context.Background(), client, "any-text", path, cfgTTS, logger)
+		if err != nil {
+			t.Fatalf("chunk %d cache-hit synth returned error: %v", i, err)
+		}
+	}
+
+	if got := calls.Load(); got != 0 {
+		t.Errorf("API got %d calls across 5 cache hits; want 0", got)
+	}
+}
+
+// TestSynthesizeChunkWithRetry_ZeroByteFileTreatedAsMissing pins
+// the size>0 carve-out: a zero-byte file at outPath is
+// indistinguishable from "no prior chunk" for the cache-skip
+// predicate, so the API IS called. This defends against partial
+// writes from a prior crash that left a touched-but-empty file.
+func TestSynthesizeChunkWithRetry_ZeroByteFileTreatedAsMissing(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = io.WriteString(w, "freshly-synthesized-mp3")
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setTTSAPIBaseURLForTest(srv.URL))
+
+	client := tts.NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "000.mp3")
+
+	// Pre-create a zero-byte file (simulates a crash mid-write that
+	// touched the path but never streamed any bytes).
+	if err := os.WriteFile(outPath, []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := synthesizeChunkWithRetry(context.Background(), client, "synth-this", outPath,
+		model.TTSConfig{VoiceID: "voice-123", RetryAttempts: 3, RetryBackoffBase: 2}, logger)
+	if err != nil {
+		t.Fatalf("zero-byte file path: %v", err)
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("API got %d calls; want 1 (zero-byte file should NOT be a cache hit)", got)
+	}
+
+	// File now contains the freshly-synthesized bytes.
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "freshly-synthesized-mp3" {
+		t.Errorf("post-synth content = %q", got)
+	}
+}
+
+// TestSynthesizeChunkWithRetry_MissingFileSynthesizes is the
+// negative control: when no chunk file exists at outPath, the
+// API IS called and the result is written.
+func TestSynthesizeChunkWithRetry_MissingFileSynthesizes(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = io.WriteString(w, "fresh-bytes")
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(setTTSAPIBaseURLForTest(srv.URL))
+
+	client := tts.NewClient(model.TTSConfig{VoiceID: "voice-123"}, "test-key")
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "000.mp3")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := synthesizeChunkWithRetry(context.Background(), client, "synth-me", outPath,
+		model.TTSConfig{VoiceID: "voice-123", RetryAttempts: 3, RetryBackoffBase: 2}, logger)
+	if err != nil {
+		t.Fatalf("missing-file path: %v", err)
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("API got %d calls; want 1", got)
+	}
+}
+
 func TestBuildOneEssayFull_HashMatchSignalsSkip(t *testing.T) {
 	// We can't easily reach buildOneEssayFull without a working
 	// extraction + a real or stub TTS path. The semantic is unit-

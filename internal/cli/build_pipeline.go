@@ -330,6 +330,25 @@ func synthesizeChunkWithRetry(
 	cfgTTS model.TTSConfig,
 	logger *slog.Logger,
 ) error {
+	// Cache-skip: if a non-empty chunk file already exists at outPath,
+	// it's a write-through hit from a prior partially-failed run
+	// (concat/ID3 failure, operator Ctrl-C, ffmpeg timeout — see
+	// wa-cfx). Re-synthesizing burns ElevenLabs credits for no
+	// reason; trust the on-disk bytes and return success.
+	//
+	// Size > 0 is the load-bearing check: a zero-byte file means a
+	// prior run crashed mid-write (or wrote nothing), and that's
+	// indistinguishable from a missing chunk for our purposes — we
+	// re-synthesize either way. atomic.WriteAtomic (the producer
+	// here) only renames a fully-written tmp onto outPath, so any
+	// non-empty file at outPath was completely written by a prior
+	// successful Synthesize call.
+	if info, err := os.Stat(outPath); err == nil && info.Size() > 0 {
+		logger.Info("chunk cache hit, skipping synth",
+			"path", outPath, "bytes", info.Size())
+		return nil
+	}
+
 	attempts := cfgTTS.RetryAttempts
 	if attempts <= 0 {
 		attempts = 1
