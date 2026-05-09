@@ -64,15 +64,18 @@ func TestVersionGuardMessage_IsActionable(t *testing.T) {
 	}
 }
 
-// --- Save — the three "behavior pinned" rows from the bead ---------------
+// --- Encode — the three "behavior pinned" rows from the bead -----------
+// (wa-i1l.2 split: pure-encoding helpers renamed from Load/Save to
+// Decode/Encode; the high-level Load/Save names are reused for the
+// R2-aware round-trip in storage.go.)
 
-func TestSave_EqualVersionWritesAsIs(t *testing.T) {
+func TestEncode_EqualVersionWritesAsIs(t *testing.T) {
 	m := &model.Manifest{Version: KnownManifestVersion}
 	var buf bytes.Buffer
-	if err := Save(m, &buf); err != nil {
-		t.Fatalf("Save: %v", err)
+	if err := Encode(m, &buf); err != nil {
+		t.Fatalf("Encode: %v", err)
 	}
-	round, err := Load(&buf)
+	round, err := Decode(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,47 +84,47 @@ func TestSave_EqualVersionWritesAsIs(t *testing.T) {
 	}
 }
 
-func TestSave_OlderVersionBumpsToCurrent(t *testing.T) {
+func TestEncode_OlderVersionBumpsToCurrent(t *testing.T) {
 	if KnownManifestVersion == 0 {
 		t.Skip("no older version exists for KnownManifestVersion=0")
 	}
 	m := &model.Manifest{Version: KnownManifestVersion - 1}
 	var buf bytes.Buffer
-	if err := Save(m, &buf); err != nil {
-		t.Fatalf("Save (older): %v", err)
+	if err := Encode(m, &buf); err != nil {
+		t.Fatalf("Encode (older): %v", err)
 	}
 	if m.Version != KnownManifestVersion {
-		t.Errorf("Save should bump in-memory Version to current; got %d", m.Version)
+		t.Errorf("Encode should bump in-memory Version to current; got %d", m.Version)
 	}
-	round, err := Load(&buf)
+	round, err := Decode(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if round.Version != KnownManifestVersion {
-		t.Errorf("on-disk Version after upgrade-save = %d; want %d", round.Version, KnownManifestVersion)
+		t.Errorf("on-disk Version after upgrade-encode = %d; want %d", round.Version, KnownManifestVersion)
 	}
 }
 
-func TestSave_NewerVersionRefusedNothingWritten(t *testing.T) {
+func TestEncode_NewerVersionRefusedNothingWritten(t *testing.T) {
 	m := &model.Manifest{Version: KnownManifestVersion + 1}
 	var buf bytes.Buffer
-	err := Save(m, &buf)
+	err := Encode(m, &buf)
 	if err == nil {
-		t.Fatal("Save with future version must error")
+		t.Fatal("Encode with future version must error")
 	}
 	if !errors.Is(err, ErrSchemaTooNew) {
-		t.Errorf("Save error should wrap ErrSchemaTooNew; got %v", err)
+		t.Errorf("Encode error should wrap ErrSchemaTooNew; got %v", err)
 	}
 	if buf.Len() != 0 {
 		t.Errorf("nothing should be written on refusal; got %d bytes: %q", buf.Len(), buf.String())
 	}
 }
 
-// --- Load — happy path + null-entries safety ----------------------------
+// --- Decode — happy path + null-entries safety -------------------------
 
-func TestLoad_DecodesValidJSON(t *testing.T) {
+func TestDecode_ParsesValidJSON(t *testing.T) {
 	const j = `{"version": 1, "entries": {"slug-a": {"slug":"slug-a","title":"A","body_hash":"h","voice_id":"v","model_id":"m","char_count":1,"chunk_count":1,"duration_seconds":1,"file_size_bytes":1,"generated_at":"2026-05-08T00:00:00Z"}}}`
-	m, err := Load(strings.NewReader(j))
+	m, err := Decode(strings.NewReader(j))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +136,8 @@ func TestLoad_DecodesValidJSON(t *testing.T) {
 	}
 }
 
-func TestLoad_EmptyEntriesIsInitialized(t *testing.T) {
-	m, err := Load(strings.NewReader(`{"version": 1}`))
+func TestDecode_EmptyEntriesIsInitialized(t *testing.T) {
+	m, err := Decode(strings.NewReader(`{"version": 1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,27 +146,27 @@ func TestLoad_EmptyEntriesIsInitialized(t *testing.T) {
 	}
 }
 
-func TestLoad_RejectsInvalidJSON(t *testing.T) {
-	_, err := Load(strings.NewReader(`{"version":`))
+func TestDecode_RejectsInvalidJSON(t *testing.T) {
+	_, err := Decode(strings.NewReader(`{"version":`))
 	if err == nil {
 		t.Fatal("malformed JSON must error")
 	}
 }
 
-// --- Load-then-Save with a future schema rejects on Save -----------------
+// --- Decode-then-Encode with a future schema rejects on Encode -----------
 // Mirrors the wa-i1l.16 "version_guard_refuses_overwrite" pin: a newer
-// on-disk schema can be inspected (read-only) but Save refuses.
+// on-disk schema can be inspected (read-only) but Encode refuses.
 
-func TestLoadThenSave_FutureSchemaRejectedOnSave(t *testing.T) {
+func TestDecodeThenEncode_FutureSchemaRejectedOnEncode(t *testing.T) {
 	future := `{"version": 9999, "entries": {}}`
-	m, err := Load(strings.NewReader(future))
+	m, err := Decode(strings.NewReader(future))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	err = Save(m, &buf)
+	err = Encode(m, &buf)
 	if !errors.Is(err, ErrSchemaTooNew) {
-		t.Errorf("Save should refuse a future-schema manifest; got %v", err)
+		t.Errorf("Encode should refuse a future-schema manifest; got %v", err)
 	}
 	if buf.Len() != 0 {
 		t.Errorf("nothing written on refusal; got %q", buf.String())
