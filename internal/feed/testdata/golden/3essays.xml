@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>PG Essays</title>
+    <link>https://feed.example.test</link>
+    <atom:link rel="self" type="application/rss+xml" href="https://feed.example.test/pg.xml?t=GOLDEN"></atom:link>
+    <description>Paul Graham essays read aloud.</description>
+    <language>en-us</language>
+    <itunes:author>Paul Graham</itunes:author>
+    <itunes:owner>
+      <itunes:name>Paul Graham</itunes:name>
+      <itunes:email>owner@example.test</itunes:email>
+    </itunes:owner>
+    <itunes:explicit>false</itunes:explicit>
+    <itunes:category text="Technology"></itunes:category>
+    <item>
+      <title>High Agency</title>
+      <enclosure url="https://feed.example.test/pg/high-agency-in-30-minutes.mp3" length="18000000" type="audio/mpeg"></enclosure>
+      <guid isPermaLink="false">pg-high-agency-in-30-minutes</guid>
+      <pubDate>Sun, 10 May 2026 09:30:00 +0000</pubDate>
+      <itunes:author>Paul Graham</itunes:author>
+      <itunes:duration>1500</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+    </item>
+    <item>
+      <title>How to Get Startup Ideas</title>
+      <enclosure url="https://feed.example.test/pg/how-to-get-startup-ideas.mp3" length="24000000" type="audio/mpeg"></enclosure>
+      <guid isPermaLink="false">pg-how-to-get-startup-ideas</guid>
+      <pubDate>Sat, 09 May 2026 10:00:00 +0000</pubDate>
+      <itunes:author>Paul Graham</itunes:author>
+      <itunes:duration>1800</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+    </item>
+    <item>
+      <title>How to Do Great Work</title>
+      <enclosure url="https://feed.example.test/pg/how-to-do-great-work.mp3" length="58629016" type="audio/mpeg"></enclosure>
+      <guid isPermaLink="false">pg-how-to-do-great-work</guid>
+      <pubDate>Fri, 08 May 2026 14:21:03 +0000</pubDate>
+      <itunes:author>Paul Graham</itunes:author>
+      <itunes:duration>3664</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+    </item>
+  </channel>
+</rss>
